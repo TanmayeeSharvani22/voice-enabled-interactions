@@ -1,70 +1,23 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 
 import MenuPanel from '../Order/MenuPanel';
 import OrderPanel from '../Order/OrderPanel';
+import { LiveQueueFeed } from '../Chat/LiveQueueFeed';
+import {
+  QUEUE_STATUS_ICON as STATUS_ICON,
+  QUEUE_STATUS_STYLE as STATUS_STYLE,
+  useQueueStream,
+  type QueueInfo,
+} from '../../hooks/useQueue';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 type SubTab = 'menu' | 'cart';
-type QueueStatus = 'LOW' | 'MEDIUM' | 'HIGH' | 'unknown';
-
-interface QueueInfo {
-  count: number;
-  status: QueueStatus;
-}
 
 interface QsrPanelProps {
   orderActive: boolean;
-}
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const QUEUE_STREAM_URL = '/queue-svc/stream';
-const QUEUE_COUNT_URL  = '/queue-svc/api/v1/queue/count';
-const QUEUE_POLL_MS    = 2_000;
-
-const STATUS_STYLE: Record<QueueStatus, string> = {
-  LOW:     'bg-green-50  border-green-200  text-green-800',
-  MEDIUM:  'bg-amber-50  border-amber-200  text-amber-800',
-  HIGH:    'bg-red-50    border-red-200    text-red-800',
-  unknown: 'bg-gray-50   border-gray-200   text-gray-500',
-};
-
-const STATUS_ICON: Record<QueueStatus, string> = {
-  LOW: '🟢', MEDIUM: '🟡', HIGH: '🔴', unknown: '⚪',
-};
-
-// ---------------------------------------------------------------------------
-// useQueueCount — polls the queue-service count endpoint every QUEUE_POLL_MS
-// ---------------------------------------------------------------------------
-
-function useQueueCount(
-  url: string,
-  intervalMs: number,
-  onData: (info: QueueInfo) => void,
-) {
-  useEffect(() => {
-    let cancelled = false;
-
-    const poll = async () => {
-      try {
-        const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
-        if (!res.ok || cancelled) return;
-        const data = await res.json() as { count: number; status: string };
-        onData({ count: data.count ?? 0, status: (data.status as QueueStatus) ?? 'unknown' });
-      } catch {
-        // queue-service unavailable — banner stays hidden
-      }
-    };
-
-    void poll();
-    const id = window.setInterval(() => { void poll(); }, intervalMs);
-    return () => { cancelled = true; window.clearInterval(id); };
-  }, [url, intervalMs, onData]);
 }
 
 // ---------------------------------------------------------------------------
@@ -83,13 +36,12 @@ export function QsrPanel({ orderActive }: QsrPanelProps) {
   const [subTab, setSubTab]             = useState<SubTab>('menu');
   const [queueInfo, setQueueInfo]       = useState<QueueInfo | null>(null);
   const [showFullMenu, setShowFullMenu] = useState(false);
-  const [streamErr, setStreamErr]       = useState(false);
 
   const onQueueData = useCallback((info: QueueInfo) => {
     setQueueInfo(info);
   }, []);
 
-  useQueueCount(QUEUE_COUNT_URL, QUEUE_POLL_MS, onQueueData);
+  useQueueStream(onQueueData);
 
   const status  = queueInfo?.status ?? 'unknown';
   const isPeak  = status === 'MEDIUM' || status === 'HIGH';
@@ -104,20 +56,8 @@ export function QsrPanel({ orderActive }: QsrPanelProps) {
     <div className="space-y-3 p-4">
 
       {/* 1 ── Live queue feed (MJPEG) ───────────────────────────────────── */}
-      <div className="overflow-hidden rounded-lg border border-gray-200 bg-black shadow-sm">
-        {streamErr ? (
-          <div className="flex items-center justify-center text-xs text-gray-400" style={{ height: '280px' }}>
-            📷 Queue feed unavailable
-          </div>
-        ) : (
-          <img
-            src={QUEUE_STREAM_URL}
-            alt="Live queue feed with person detection"
-            className="w-full object-contain"
-            style={{ height: '280px' }}
-            onError={() => setStreamErr(true)}
-          />
-        )}
+      <div className="overflow-hidden rounded-lg border border-gray-200 shadow-sm">
+        <LiveQueueFeed height="280px" />
       </div>
 
       {/* 2 ── Queue status banner ───────────────────────────────────────── */}

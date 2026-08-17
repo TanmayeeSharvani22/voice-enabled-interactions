@@ -4,7 +4,7 @@
 # Dockerfile — kiosk-core / kiosk-ui
 #
 # Default CMD starts the kiosk-core FastAPI service on port 8012.
-# The kiosk-ui service in docker-compose.yml overrides CMD to run gradio_app.py.
+# The kiosk-ui React app (kiosk-ui/) is served separately via its own container.
 FROM python:3.11-slim
 
 ARG APP_UID=1000
@@ -31,7 +31,7 @@ RUN pip install --upgrade pip \
 
 COPY . .
 
-RUN mkdir -p /app/generated_audio /app/data \
+RUN mkdir -p /app/generated_audio /app/data /app/conversations \
     && chown -R ${APP_UID}:${APP_GID} /app
 
 USER appuser

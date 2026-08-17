@@ -91,10 +91,16 @@ services:
       QUEUE_SERVICE__SOURCE__RTSP_URL: "rtsp://rtsp-streamer:8554/${STREAM_NAME:-queue}"
       NO_PROXY: "localhost,127.0.0.1,rtsp-streamer,queue-service"
       no_proxy: "localhost,127.0.0.1,rtsp-streamer,queue-service"
+      ZE_ENABLE_ALT_DRIVERS: libze_intel_npu.so
     volumes:
       - ./queue-service/conf:/app/queue-service/conf:ro
-      - ./queue-service/models:/app/queue-service/models:ro
+      # models/ is NOT mounted — the IR is baked into the image at build time.
+      # Run ./setup_models.sh first to download yolo26n IR to queue-service/models/,
+      # then docker compose build to bake it in. See setup_models.sh for details.
+      - ./queue-service/src:/app/queue-service/src:ro
+    devices:
       - /dev/dri:/dev/dri
+      - ${ACCEL_MOUNT_PATH:-/dev/null}:/dev/accel/accel0
     group_add:
       - video
       - "${RENDER_GID:-992}"
@@ -125,9 +131,20 @@ services:
     build:
       context: ./kiosk_core/metrics-collector
       dockerfile: Dockerfile
-    # Pinned independently of RELEASE_TAG: metrics-collector is excluded from
-    # this release cycle, so it stays on the last released image.
-    image: ${REGISTRY:-intel}/hl-ai-metrics-collector:2026.1.0
+    # Built from ./kiosk_core/metrics-collector rather than pulled.
+    #
+    # This service was previously pinned to the released
+    # hl-ai-metrics-collector:2026.1.0 image. That image predates the current
+    # source tree and does not serve /health at all, so the healthcheck below
+    # could never pass (observed FailingStreak: 1274). It also runs the older
+    # single-threaded http.server implementation, which serialised every
+    # request behind an unbounded qmassa JSON parse and made the dashboard's
+    # /metrics poll take 20-40 s -- long enough that the browser gave up and
+    # the performance charts stayed empty.
+    #
+    # The tag is suffixed to make clear this is a locally built artifact and
+    # to avoid shadowing the published 2026.1.0 image with different content.
+    image: ${REGISTRY:-intel}/metrics-collector:${RELEASE_TAG:-2026.1.0}
     container_name: metrics-collector
     privileged: true
     pid: host
@@ -184,6 +201,20 @@ services:
       # ./.cache mount persists every model cache the service uses
       # (huggingface, openai-whisper, torch hub, etc.).
       HF_HOME: /app/audio_analyzer/.cache/huggingface
+      # Force fully offline operation for HF model/tokenizer loading. The
+      # pyannote diarization pipeline's local files (segmentation, embedding,
+      # plda incl. xvec_transform.npz) are already fully cached under
+      # ./models by ensure_model.py — but without these flags,
+      # huggingface_hub still makes a live metadata/revision check on every
+      # load even when local files are present, which crashes/silently
+      # disables diarization when there is no network/proxy access at all.
+      # Confirmed fix: with HF_HUB_OFFLINE=1 forced, PyannoteDiarizer loads
+      # successfully from local cache with zero network calls.
+      # Set HF_HUB_OFFLINE=0 / TRANSFORMERS_OFFLINE=0 in .env if this
+      # environment has working internet/proxy access and you want live
+      # Hub checks (e.g. picking up a newly-released model revision).
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+      TRANSFORMERS_OFFLINE: ${TRANSFORMERS_OFFLINE:-1}
       # HuggingFace token — required by Pyannote speaker diarization.
       # Set HF_TOKEN in .env (single source of truth).
       HF_TOKEN: ${HF_TOKEN:-}
@@ -224,7 +255,7 @@ services:
     restart: unless-stopped
 
   text-to-speech:
-    image: ${REGISTRY:-intel}/text-to-speech:2026.2.0-rc2
+    image: ${REGISTRY:-intel}/text-to-speech:${RELEASE_TAG:-latest}
     container_name: text-to-speech
     user: "1000:1000"
     ports:
@@ -290,6 +321,10 @@ services:
       # flag alone falls back to the buffered /api/v1/agent/chat path.
       # Set AGENT_STREAM_SENTENCES=false to revert with a restart, no rebuild.
       AGENT_STREAM_SENTENCES: ${AGENT_STREAM_SENTENCES:-true}
+      # Caps generated tokens per LLM round-trip. Decode dominates agent
+      # latency, so this bounds the worst case (a turn that free-runs instead
+      # of calling a tool). Tunable from .env without a rebuild.
+      AGENT_MAX_TOKENS: ${AGENT_MAX_TOKENS:-192}
       # Embedding + reranker models are loaded in-process via OpenVINO at
       # startup (config.yaml pins device: GPU for both). Override with
       # TARGET_DEVICE=CPU (same variable used for the ovms-llm container) so
@@ -307,15 +342,41 @@ services:
       # brake on spoken answer length: the model paraphrases whatever it is
       # given, so 2000 chars of context produced a 20-second spoken reply.
       RAG_MAX_CONTEXT_CHARS: ${RAG_MAX_CONTEXT_CHARS:-1800}
+      # Force fully offline operation for HF tokenizer/model loading — the
+      # tokenizer is already cached in the rag_service_hf_cache volume, and
+      # newer `transformers` versions otherwise make a live Hub call
+      # (list_repo_templates) even when local files exist, which crashes
+      # startup when there is no network/proxy access at all.
+      # Set HF_HUB_OFFLINE=0 / TRANSFORMERS_OFFLINE=0 in .env if this
+      # environment has working internet/proxy access and you want live
+      # Hub checks (e.g. picking up a newly-released model revision).
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+      TRANSFORMERS_OFFLINE: ${TRANSFORMERS_OFFLINE:-1}
       # Bypass corporate proxy for all intra-cluster traffic so that
       # requests to ovms-llm, kiosk-core, etc. go directly on the
       # Docker bridge network instead of through the Intel proxy.
       NO_PROXY: "localhost,127.0.0.1,ovms-llm,kiosk-core,audio-analyzer,text-to-speech,metrics-collector,rag-service,172.16.0.0/12,10.0.0.0/8"
       no_proxy: "localhost,127.0.0.1,ovms-llm,kiosk-core,audio-analyzer,text-to-speech,metrics-collector,rag-service,172.16.0.0/12,10.0.0.0/8"
+      # Domain-specific config (identity, intent rules, reply templates) is
+      # mounted from the consuming application rather than baked into the image.
+      # Non-kiosk deployments override this path (or leave it unset for
+      # generic RAG-only mode).
+      RAG_DOMAIN_CONFIG_PATH: /app/rag-service/domain-config/agent_profile.yaml
+      # Enable or disable the ordering-agent subsystem. Set to "false" for
+      # pure-RAG deployments (healthcare, education) to skip MCP bootstrap.
+      ORDERING_AGENT_ENABLED: ${ORDERING_AGENT_ENABLED:-true}
     volumes:
       - rag_service_models:/app/rag-service/models
       - rag_service_storage:/app/rag-service/storage
       - rag_service_hf_cache:/app/rag-service/.cache/huggingface
+      # Mount kiosk-specific domain config into the container.
+      # Generic image → kiosk-aware at runtime via this mount.
+      - ./configs/rag-service:/app/rag-service/domain-config:ro
+      # Mount kiosk domain plugins (ordering agent, guards) from the consuming
+      # application. The rag-service image has an empty plugins/ mount point;
+      # all domain Python code lives here in the smart-kiosk-assistant repo.
+      # When rag-service moves to edge-ai-libraries, only this line changes.
+      - ./plugins:/app/rag-service/plugins:ro
     # start_period covers first-run model download + OpenVINO INT8 export
     # (~2-3 min for Qwen3-4B + embeddings + reranker). Cached runs are fast.
     healthcheck:
@@ -340,6 +401,32 @@ services:
   # Why OpenVINO/Qwen3-4B-int4-ov + hermes3?
   #   Pre-converted INT4 (~2 GB) with native tool-calling support per
   #   https://docs.openvino.ai/2026/model-server/ovms_demos_continuous_batching_agent.html
+  #
+  # OVMS_TOOL_PARSER must match the model's chat template, not just the vendor:
+  #   hermes3 -> Qwen3.x / Qwen2.5      qwen3coder -> Qwen3.5+ (XML tool syntax)
+  #   gemma4  -> Gemma 4                phi4       -> Phi-4
+  # Setting it to `none` disables parsing; omitting the flag lets OVMS auto-detect
+  # from the chat template. A mismatched parser silently drops every tool call.
+  #
+  # OVMS_TOOL_GUIDED constrains decoding to the tool JSON schema. It is the main
+  # mitigation for small models emitting raw tool-result JSON instead of prose.
+  #
+  # Speculative decoding (--draft_source_model, a Qwen3-0.6B draft model) was
+  # benchmarked and REJECTED — see
+  # tests/benchmarks/results/replay-qwen3-4b-specdecode.json for the (~4%,
+  # noise-level) latency result. Worse: it broke streamed tool-call argument
+  # delivery outright. With the draft model attached, OVMS's streaming
+  # response emits the tool call's arguments as a single truncated chunk
+  # (e.g. ``{"category":``) and immediately closes the stream with
+  # ``finish_reason: "tool_calls"``, instead of the correct multi-chunk
+  # incremental arguments that non-speculative streaming produces. This
+  # surfaced in production as every voice turn that should have called a tool
+  # (e.g. "I would like to explore different type of burgers") replying
+  # "Sorry, I encountered an error" — a JSONDecodeError parsing the truncated
+  # arguments. Confirmed via a raw curl to /v3/chat/completions with
+  # stream=true, comparing with and without --draft_source_model. Do not
+  # re-add this flag without first confirming OVMS has fixed streamed
+  # tool-call + speculative-decoding interaction upstream.
   ovms-llm:
     image: openvino/model_server:latest-gpu
     container_name: ovms-llm
@@ -365,7 +452,8 @@ services:
       --source_model ${OVMS_MODEL_NAME:-OpenVINO/Qwen3-4B-int4-ov}
       --model_repository_path /models
       --task text_generation
-      --tool_parser hermes3
+      --tool_parser ${OVMS_TOOL_PARSER:-hermes3}
+      --enable_tool_guided_generation ${OVMS_TOOL_GUIDED:-false}
       --target_device ${TARGET_DEVICE:-GPU}
       --cache_dir /tmp/ov_cache
       --enable_prefix_caching ${OVMS_PREFIX_CACHING:-true}
@@ -394,11 +482,41 @@ services:
       KIOSK_CORE_ANALYZER_URL: http://audio-analyzer:8010/v1/audio/transcriptions
       KIOSK_CORE_RAG_URL:      http://rag-service:8020/api/v1/query
       KIOSK_CORE_TTS_URL:      http://text-to-speech:8011/v1/audio/speech
+      # Back to Ryan (US English male, bright and projecting) — the
+      # text-to-speech service's own default_speaker, and previously
+      # confirmed the loudest/fastest built-in voice (see
+      # configs/text-to-speech/config.yaml). Kabir was tried and reverted.
+      # This override is left explicit (rather than omitted) so the choice
+      # is visible here and can be swapped without touching config.yaml.
+      # Full supported_speakers list is in configs/text-to-speech/config.yaml.
+      KIOSK_CORE_TTS_VOICE:    Ryan
       KIOSK_CORE_METRICS_URL:  http://metrics-collector:9000
       # Diarization — re-enable once HF terms are accepted for pyannote models.
       # Accept terms at: https://huggingface.co/pyannote/speaker-diarization-3.1
       #                  https://huggingface.co/pyannote/segmentation-3.0
-      KIOSK_CORE_DIARIZATION_ENABLED: "true"
+      # Was hardcoded to "true" here, which silently ignored any
+      # KIOSK_CORE_DIARIZATION_ENABLED=false set in the shell/.env — only
+      # audio-analyzer's AUDIO_ANALYZER__MODELS__ASR__DIARIZATION override
+      # (below, in the audio-analyzer service) actually read the variable.
+      # Parameterized so setting the env var once takes effect on both
+      # services (e.g. as a fallback toggle if diarization ever needs to be
+      # disabled in an environment where the pyannote model cache is
+      # genuinely incomplete). Under normal offline operation, diarization
+      # should stay enabled — see the HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE
+      # vars on audio-analyzer above, which are the actual fix for pyannote
+      # loading fully offline from its already-complete local cache.
+      KIOSK_CORE_DIARIZATION_ENABLED: ${KIOSK_CORE_DIARIZATION_ENABLED:-true}
+      # Consecutive rejected turns (speaker filter dropped every segment as
+      # non-primary) required before the kiosk speaks
+      # KIOSK_CORE_UNRECOGNIZED_SPEAKER_PROMPT instead of staying silent.
+      # Default upstream is 2 (tolerate a one-off Whisper hallucination/TTS
+      # echo). Observed live in this offline deployment: the primary speaker
+      # lock flips mid-conversation (diarization/embedding instability), so a
+      # single genuine question gets silently dropped with zero feedback
+      # before a 2nd consecutive rejection ever happens. Set to 1 here so the
+      # customer is never left in silence — see kiosk_core/config.py for the
+      # full trade-off.
+      KIOSK_CORE_CONSECUTIVE_REJECTION_THRESHOLD: ${KIOSK_CORE_CONSECUTIVE_REJECTION_THRESHOLD:-2}
       # Ordering & agent routing
       KIOSK_CORE_ORDERING_ENABLED: "true"
       KIOSK_CORE_AGENT_URL:        http://rag-service:8020/api/v1/agent/chat
@@ -420,6 +538,12 @@ services:
       # Queue-service integration (dynamic peak-hour menu)
       KIOSK_CORE_QUEUE_SERVICE_ENABLED: "${KIOSK_CORE_QUEUE_SERVICE_ENABLED:-true}"
       KIOSK_CORE_QUEUE_SERVICE_URL:     http://queue-service:8090
+      # Conversation recording (offline analysis). Off by default; set to
+      # "true" to append every completed voice turn to
+      # ./conversations/<conversation_id>.jsonl on the host (bind-mounted
+      # below, so files are inspectable without entering the container).
+      KIOSK_CORE_CONVERSATION_LOGGING_ENABLED: "${KIOSK_CORE_CONVERSATION_LOGGING_ENABLED:-false}"
+      KIOSK_CORE_CONVERSATION_LOG_DIR:          /app/conversations
       # Bypass corporate proxy for intra-cluster traffic
       NO_PROXY: "localhost,127.0.0.1,ovms-llm,kiosk-core,audio-analyzer,text-to-speech,metrics-collector,rag-service,queue-service,172.16.0.0/12,10.0.0.0/8"
       no_proxy: "localhost,127.0.0.1,ovms-llm,kiosk-core,audio-analyzer,text-to-speech,metrics-collector,rag-service,queue-service,172.16.0.0/12,10.0.0.0/8"
@@ -427,6 +551,7 @@ services:
       - generated_audio:/app/generated_audio
       - kiosk_db:/app/data
       - ./configs/ordering:/app/configs/ordering:ro
+      - ./conversations:/app/conversations
     depends_on:
       audio-analyzer:
         condition: service_healthy
@@ -499,6 +624,10 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # Operator/demo screen — chat transcript, performance dashboard, device &
+  # knowledge-base settings, QSR tab. Shown on the monitor facing staff/demo
+  # audience. KIOSK_UI_MODE is intentionally omitted here: the image defaults
+  # to 'operator' (see src/uiMode.ts) so this behaves exactly as before.
   kiosk-ui:
     build:
       context: ./kiosk-ui
@@ -517,6 +646,31 @@ services:
     depends_on:
       kiosk-core:
         condition: service_healthy
+    restart: unless-stopped
+
+  # Customer-facing screen — single-view menu (queue-driven) + cart + voice
+  # "Ask" button, for the physical kiosk touchscreen. Reuses the exact same
+  # image/build as kiosk-ui; only KIOSK_UI_MODE and the published port differ,
+  # so the two screens can never drift out of sync with each other's backend
+  # wiring. No separate build context or Dockerfile.
+  kiosk-ui-customer:
+    image: ${REGISTRY:-intel}/kiosk-ui:${RELEASE_TAG:-latest}
+    container_name: kiosk-ui-customer
+    ports:
+      - "7861:7860"
+    environment:
+      KIOSK_UI_MODE:              customer
+      KIOSK_CORE_UI_BASE_URL:     http://kiosk-core:8012
+      KIOSK_CORE_UI_ANALYZER_URL: http://audio-analyzer:8010/v1/audio/transcriptions
+      KIOSK_CORE_UI_RAG_URL:      http://rag-service:8020/api/v1/query
+      KIOSK_CORE_UI_TTS_URL:      http://text-to-speech:8011/v1/audio/speech
+    volumes:
+      - generated_audio:/app/generated_audio
+    depends_on:
+      kiosk-core:
+        condition: service_healthy
+      kiosk-ui:
+        condition: service_started
     restart: unless-stopped
 
 volumes:
