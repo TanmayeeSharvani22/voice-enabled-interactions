@@ -380,7 +380,17 @@ up: check-env setup-dirs clean-metrics ## Start all services
 
 down: ## Stop all services
 	@echo "$(BLUE)Stopping Smart Kiosk Assistant...$(NC)"
-	$(COMPOSE_BASE) $(_IDENTITY_PROFILE) down
+	@# Always tear down with --profile identity enabled, regardless of the
+	@# IDENTITY/.env value at the time `down` is invoked. Compose scopes
+	@# `down` to the same profile-filtered service set as `up`; if identity
+	@# was started with `make up IDENTITY=true` and the stack is later
+	@# stopped with a plain `make down` (IDENTITY unset/false), compose
+	@# never considers identity-service part of the project and leaves it
+	@# (and the network it's attached to) running — this is what caused
+	@# "Network ... Resource is still in use" and an orphaned
+	@# identity-service container. Including the profile unconditionally on
+	@# `down` is a no-op when identity-service was never started.
+	$(COMPOSE_BASE) --profile identity down
 	@$(MAKE) --no-print-directory clean-metrics
 	@echo "$(GREEN)✓ All services stopped$(NC)"
 
