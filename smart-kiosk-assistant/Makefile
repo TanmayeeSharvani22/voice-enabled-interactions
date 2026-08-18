@@ -8,7 +8,7 @@
 .PHONY: help init-env setup-dirs setup-models download-sample-video check-env show-config \
 		build up down restart status logs \
 		logs-ovms logs-rag logs-core logs-ui logs-audio logs-tts logs-metrics \
-		test clean dev-build
+		test clean clean-metrics dev-build
 
 # =============================================================================
 # Load .env (silent if missing — check-env will warn)
@@ -62,50 +62,12 @@ _CAMERA_DEVICE_RAW     = $(strip $(CAMERA_DEVICE))
 _RTSP_CAMERA_DEVICE    = $(if $(_RTSP_LIVE_ON),$(_CAMERA_DEVICE_RAW),/dev/null)
 COMPOSE_BASE           = RTSP_SOURCE_MODE=$(_RTSP_SOURCE_MODE) RTSP_CAMERA_DEVICE=$(_RTSP_CAMERA_DEVICE) docker compose -f $(COMPOSE_FILE)
 
-# Defined as a single-line macro (each physical line ends with "\", which make
-# condenses into ONE shell command). It must NOT use define/endef: that would keep
-# embedded newlines in the value, and because this Makefile has no .ONESHELL each
-# newline would run in a separate shell, breaking the shared set -e / variables
-# across the NPU detection + validation + compose flow.
-RUN_COMPOSE_WITH_RUNTIME_NPU = \
-set -e; \
-ASR_CFG_PATH="configs/audio-analyzer/config.yaml"; \
-ASR_CFG_PROVIDER=$$(awk '/^[[:space:]]*models:[[:space:]]*$$/{m=1;next} m&&/^[[:space:]]*asr:[[:space:]]*$$/{a=1;next} m&&a&&/^[[:space:]]*provider:[[:space:]]*/{line=$$0; sub(/\#.*/,"",line); sub(/^[[:space:]]*provider:[[:space:]]*/,"",line); gsub(/[[:space:]]/,"",line); print tolower(line); exit}' "$$ASR_CFG_PATH"); \
-ASR_CFG_DEVICE=$$(awk '/^[[:space:]]*models:[[:space:]]*$$/{m=1;next} m&&/^[[:space:]]*asr:[[:space:]]*$$/{a=1;next} m&&a&&/^[[:space:]]*device:[[:space:]]*/{line=$$0; sub(/\#.*/,"",line); sub(/^[[:space:]]*device:[[:space:]]*/,"",line); gsub(/[[:space:]]/,"",line); print toupper(line); exit}' "$$ASR_CFG_PATH"); \
-ACCEL_MOUNT_PATH=""; \
-if [ "$$ASR_CFG_PROVIDER" = "openvino" ] && [ "$$ASR_CFG_DEVICE" = "NPU" ]; then \
-	NPU_NODE=$$(ls /dev/accel/accel* 2>/dev/null | head -n 1); \
-	if [ -z "$$NPU_NODE" ]; then \
-		echo "  $(RED)✗ ERROR: OpenVINO ASR is configured with device=NPU in $$ASR_CFG_PATH, but no Intel NPU was detected.$(NC)"; \
-		echo "    Please select device=CPU/GPU or install/enable the Intel NPU driver and runtime."; \
-		echo "    Check /dev/accel and Intel NPU runtime/driver installation."; \
-		exit 1; \
-	elif [ ! -c "$$NPU_NODE" ]; then \
-		echo "  $(RED)✗ ERROR: OpenVINO ASR is configured with device=NPU in $$ASR_CFG_PATH, but $$NPU_NODE is not a character device.$(NC)"; \
-		echo "    Please verify Intel NPU driver/runtime installation."; \
-		exit 1; \
-	fi; \
-	echo "  $(BLUE)Validating NPU visibility inside the audio-analyzer image...$(NC)"; \
-	if ! docker run --rm \
-		--user 1000:1000 \
-		--group-add $(if $(strip $(RENDER_GID)),$(RENDER_GID),992) \
-		--device "$$NPU_NODE:/dev/accel/accel0" \
-		--device /dev/dri:/dev/dri \
-		--env ZE_ENABLE_ALT_DRIVERS=libze_intel_npu.so \
-		--env ACCEL_MOUNT_PATH="$$NPU_NODE" \
-		--entrypoint sh "$(_DOCKER_REGISTRY)/audio-analyzer:$(RELEASE_TAG)" \
-			-lc 'python3 -c "import openvino as ov; devices = [str(device).upper() for device in ov.Core().available_devices]; print(devices); raise SystemExit(0 if \"NPU\" in devices else 1)"'; then \
-		echo "  $(RED)✗ ERROR: OpenVINO does not report an NPU device inside the audio-analyzer container.$(NC)"; \
-		echo "    Verify ACCEL_MOUNT_PATH, /dev/accel mapping, ZE_ENABLE_ALT_DRIVERS, and the host Intel NPU runtime."; \
-		exit 1; \
-	fi; \
-	ACCEL_MOUNT_PATH="$$NPU_NODE"; \
-	echo "  $(GREEN)✓ Intel NPU detected and validated inside the container$(NC) ($$NPU_NODE)"; \
-fi; \
-RTSP_SOURCE_MODE=$(_RTSP_SOURCE_MODE) RTSP_CAMERA_DEVICE=$(_RTSP_CAMERA_DEVICE) ACCEL_MOUNT_PATH="$$ACCEL_MOUNT_PATH" $(1) docker compose -f $(COMPOSE_FILE) $(2)
-
-# Services with fully local build contexts
-LOCAL_ONLY_SERVICES := metrics-collector rag-service kiosk-core kiosk-ui queue-service rtsp-streamer
+# Services with fully local build contexts (built from source in this repo).
+# metrics-collector is NOT in this list: its source now lives in the
+# edge-ai-suites repo (multi_modal_patient_monitoring/services/metrics-
+# collector) and it is pulled as intel/hl-ai-metrics-collector, like the EAL
+# images below.
+LOCAL_ONLY_SERVICES := rag-service kiosk-core kiosk-ui rtsp-streamer queue-service
 
 # Identity feature (profile-gated). Driven by KIOSK_CORE_IDENTITY_ENABLED in
 # .env by default — set it to true there to build/start the identity-service
@@ -124,10 +86,8 @@ _IDENTITY_PROFILE  = $(if $(_IDENTITY_ON),--profile identity,)
 _IDENTITY_SVC      = $(if $(_IDENTITY_ON),identity-service,)
 export KIOSK_CORE_IDENTITY_ENABLED = $(if $(_IDENTITY_ON),true,false)
 
-# audio-analyzer and text-to-speech live in a separate repository
-# (edge-ai-libraries) and have no local build context here — they are always
-# pulled pre-built from Docker Hub, using the tags pinned in docker-compose.yml.
-REGISTRY_ONLY_SERVICES := audio-analyzer text-to-speech
+# audio-analyzer and text-to-speech are published to Docker Hub by the
+# edge-ai-libraries CI pipeline and are always pulled — never built here.
 
 # Colors
 RED    := \033[0;31m
@@ -210,7 +170,7 @@ init-env: ## Create .env from .env.example (backs up existing .env)
 
 setup-dirs: ## Create required runtime directories
 	@echo "$(BLUE)Creating required directories...$(NC)"
-	@mkdir -p models storage
+	@mkdir -p models storage conversations metrics
 	@echo "$(GREEN)✓ Directories ready$(NC)"
 
 setup-models: ## Download the OVMS LLM model (Qwen3-4B) via setup_models.sh
@@ -292,95 +252,6 @@ check-env: ## Validate .env and all required variables before running the stack
 		echo "  $(GREEN)✓ TARGET_DEVICE=$(TARGET_DEVICE)$(NC)"; \
 	fi; \
 	\
-	ASR_CFG_PATH="configs/audio-analyzer/config.yaml"; \
-	if [ ! -f "$$ASR_CFG_PATH" ]; then \
-		echo "  $(RED)✗ $$ASR_CFG_PATH not found$(NC)"; \
-		ERRORS=$$((ERRORS+1)); \
-	else \
-		ASR_CFG_PROVIDER=$$(awk '/^[[:space:]]*models:[[:space:]]*$$/{m=1;next} m&&/^[[:space:]]*asr:[[:space:]]*$$/{a=1;next} m&&a&&/^[[:space:]]*provider:[[:space:]]*/{line=$$0; sub(/#.*/,"",line); sub(/^[[:space:]]*provider:[[:space:]]*/,"",line); gsub(/[[:space:]]/,"",line); print tolower(line); exit}' "$$ASR_CFG_PATH"); \
-		ASR_CFG_DEVICE=$$(awk '/^[[:space:]]*models:[[:space:]]*$$/{m=1;next} m&&/^[[:space:]]*asr:[[:space:]]*$$/{a=1;next} m&&a&&/^[[:space:]]*device:[[:space:]]*/{line=$$0; sub(/#.*/,"",line); sub(/^[[:space:]]*device:[[:space:]]*/,"",line); gsub(/[[:space:]]/,"",line); print toupper(line); exit}' "$$ASR_CFG_PATH"); \
-		if [ -z "$$ASR_CFG_PROVIDER" ] || [ -z "$$ASR_CFG_DEVICE" ]; then \
-			echo "  $(RED)✗ Could not read models.asr.provider/device from $$ASR_CFG_PATH$(NC)"; \
-			ERRORS=$$((ERRORS+1)); \
-		else \
-			echo "  $(GREEN)✓ ASR config source = $$ASR_CFG_PATH$(NC)"; \
-			echo "  $(GREEN)✓ ASR provider=$$ASR_CFG_PROVIDER, device=$$ASR_CFG_DEVICE$(NC)"; \
-			if [ "$$ASR_CFG_PROVIDER" != "openai" ] && [ "$$ASR_CFG_PROVIDER" != "openvino" ] && [ "$$ASR_CFG_PROVIDER" != "whispercpp" ]; then \
-				echo "  $(RED)✗ Invalid ASR provider in $$ASR_CFG_PATH: $$ASR_CFG_PROVIDER$(NC)  (must be openai | openvino | whispercpp)"; \
-				ERRORS=$$((ERRORS+1)); \
-			fi; \
-			if [ "$$ASR_CFG_DEVICE" != "CPU" ] && [ "$$ASR_CFG_DEVICE" != "GPU" ] && [ "$$ASR_CFG_DEVICE" != "NPU" ]; then \
-				echo "  $(RED)✗ Invalid ASR device in $$ASR_CFG_PATH: $$ASR_CFG_DEVICE$(NC)  (must be CPU | GPU | NPU)"; \
-				ERRORS=$$((ERRORS+1)); \
-			fi; \
-			if [ "$$ASR_CFG_PROVIDER" = "openai" ] && [ "$$ASR_CFG_DEVICE" != "CPU" ]; then \
-				echo "  $(RED)✗ ERROR: OpenAI ASR is configured with device=$$ASR_CFG_DEVICE in $$ASR_CFG_PATH, but OpenAI ASR supports CPU only in this stack.$(NC)"; \
-				echo "    Please set models.asr.device=CPU, or switch to provider=openvino for GPU/NPU."; \
-				ERRORS=$$((ERRORS+1)); \
-			fi; \
-			if [ "$$ASR_CFG_PROVIDER" = "openvino" ]; then \
-				if [ "$$ASR_CFG_DEVICE" = "CPU" ]; then \
-					echo "  $(GREEN)✓ OpenVINO ASR CPU mode selected$(NC)"; \
-				elif [ "$$ASR_CFG_DEVICE" = "GPU" ]; then \
-					GPU_RENDER_NODE=$$(ls /dev/dri/renderD* 2>/dev/null | head -n 1); \
-					if [ -z "$$GPU_RENDER_NODE" ]; then \
-						echo "  $(RED)✗ ERROR: OpenVINO ASR is configured with device=GPU in $$ASR_CFG_PATH, but no Intel GPU was detected.$(NC)"; \
-						echo "    Please select device=CPU or install/enable the Intel GPU runtime."; \
-						ERRORS=$$((ERRORS+1)); \
-					else \
-						if command -v lspci >/dev/null 2>&1; then \
-							if lspci | grep -E "VGA compatible controller|3D controller|Display controller" | grep -qi "Intel"; then \
-								echo "  $(GREEN)✓ Intel GPU detected$(NC) ($$GPU_RENDER_NODE)"; \
-							else \
-								echo "  $(RED)✗ ERROR: OpenVINO ASR is configured with device=GPU in $$ASR_CFG_PATH, but no Intel GPU was detected.$(NC)"; \
-								echo "    Found $$GPU_RENDER_NODE, but lspci did not report an Intel display/GPU controller."; \
-								echo "    Please select device=CPU or install/enable Intel GPU drivers/runtime."; \
-								ERRORS=$$((ERRORS+1)); \
-							fi; \
-						else \
-							echo "  $(GREEN)✓ GPU render node detected$(NC) ($$GPU_RENDER_NODE)"; \
-							echo "  $(YELLOW)⚠ lspci not available; proceeding based on /dev/dri render node detection$(NC)"; \
-						fi; \
-					fi; \
-				elif [ "$$ASR_CFG_DEVICE" = "NPU" ]; then \
-					NPU_NODE=$$(ls /dev/accel/accel* 2>/dev/null | head -n 1); \
-					if [ -z "$$NPU_NODE" ]; then \
-						echo "  $(RED)✗ ERROR: OpenVINO ASR is configured with device=NPU in $$ASR_CFG_PATH, but no Intel NPU was detected.$(NC)"; \
-						echo "    Please select device=CPU/GPU or install/enable the Intel NPU driver and runtime."; \
-						echo "    Check /dev/accel and Intel NPU runtime/driver installation."; \
-						ERRORS=$$((ERRORS+1)); \
-					elif [ ! -c "$$NPU_NODE" ]; then \
-						echo "  $(RED)✗ ERROR: OpenVINO ASR is configured with device=NPU in $$ASR_CFG_PATH, but $$NPU_NODE is not a character device.$(NC)"; \
-						echo "    Please verify Intel NPU driver/runtime installation."; \
-						ERRORS=$$((ERRORS+1)); \
-					else \
-						echo "  $(BLUE)Validating NPU visibility inside the audio-analyzer image...$(NC)"; \
-						if docker run --rm \
-							--user 1000:1000 \
-							--group-add $(if $(strip $(RENDER_GID)),$(RENDER_GID),992) \
-							--device "$$NPU_NODE:/dev/accel/accel0" \
-							--device /dev/dri:/dev/dri \
-							--env ZE_ENABLE_ALT_DRIVERS=libze_intel_npu.so \
-							--env ACCEL_MOUNT_PATH="$$NPU_NODE" \
-							--entrypoint sh "$(_DOCKER_REGISTRY)/audio-analyzer:$(RELEASE_TAG)" \
-							-lc 'python3 -c "import openvino as ov; devices = [str(device).upper() for device in ov.Core().available_devices]; print(devices); raise SystemExit(0 if \"NPU\" in devices else 1)"' >/dev/null; then \
-							echo "  $(GREEN)✓ Intel NPU detected and validated inside the container$(NC) ($$NPU_NODE)"; \
-						else \
-							echo "  $(RED)✗ ERROR: OpenVINO does not report an NPU device inside the audio-analyzer container.$(NC)"; \
-							echo "    Verify ACCEL_MOUNT_PATH, /dev/accel mapping, ZE_ENABLE_ALT_DRIVERS, and the host Intel NPU runtime."; \
-							ERRORS=$$((ERRORS+1)); \
-						fi; \
-					fi; \
-				fi; \
-			fi; \
-			if [ "$$ASR_CFG_PROVIDER" = "whispercpp" ] && [ "$$ASR_CFG_DEVICE" != "CPU" ]; then \
-				echo "  $(RED)✗ ERROR: whispercpp ASR supports CPU only in this stack, but $$ASR_CFG_PATH sets device=$$ASR_CFG_DEVICE.$(NC)"; \
-				echo "    Please set models.asr.device=CPU for provider=whispercpp."; \
-				ERRORS=$$((ERRORS+1)); \
-			fi; \
-		fi; \
-	fi; \
-	\
 	if [ "$(_RTSP_SOURCE_MODE_RAW)" != "" ] && [ "$(_RTSP_SOURCE_MODE_RAW)" != "sample" ] && [ "$(_RTSP_SOURCE_MODE_RAW)" != "live" ]; then \
 		echo "  $(RED)✗ RTSP_SOURCE_MODE='$(_RTSP_SOURCE_MODE_RAW)' is invalid$(NC)  (must be sample | live)"; \
 		ERRORS=$$((ERRORS+1)); \
@@ -420,7 +291,7 @@ check-env: ## Validate .env and all required variables before running the stack
 			echo "  $(YELLOW)⚠ TARGET_DEVICE=GPU but no /dev/dri/renderD* device found$(NC)"; \
 			echo "    Install Intel GPU drivers or set TARGET_DEVICE=CPU in .env"; \
 		else \
-			echo "  $(GREEN)✓ GPU device node found$(NC) ($$(ls /dev/dri/renderD* 2>/dev/null | head -n 1))"; \
+			echo "  $(GREEN)✓ GPU device node found$(NC) ($$(ls /dev/dri/renderD* 2>/dev/null | head -1))"; \
 		fi; \
 	fi; \
 	\
@@ -452,15 +323,6 @@ show-config: ## Print resolved configuration
 	@echo "  TARGET_DEVICE     = $(TARGET_DEVICE)"
 	@echo "  OVMS_MODEL_NAME   = $(OVMS_MODEL_NAME)"
 	@echo "  RENDER_GID        = $(RENDER_GID)"
-	@ASR_CFG_PATH="configs/audio-analyzer/config.yaml"; \
-	if [ ! -f "$$ASR_CFG_PATH" ]; then \
-		echo "  $(RED)✗ $$ASR_CFG_PATH not found$(NC)"; \
-	else \
-		ASR_CFG_PROVIDER=$$(awk '/^[[:space:]]*models:[[:space:]]*$$/{m=1;next} m&&/^[[:space:]]*asr:[[:space:]]*$$/{a=1;next} m&&a&&/^[[:space:]]*provider:[[:space:]]*/{line=$$0; sub(/#.*/,"",line); sub(/^[[:space:]]*provider:[[:space:]]*/,"",line); gsub(/[[:space:]]/,"",line); print tolower(line); exit}' "$$ASR_CFG_PATH"); \
-		ASR_CFG_DEVICE=$$(awk '/^[[:space:]]*models:[[:space:]]*$$/{m=1;next} m&&/^[[:space:]]*asr:[[:space:]]*$$/{a=1;next} m&&a&&/^[[:space:]]*device:[[:space:]]*/{line=$$0; sub(/#.*/,"",line); sub(/^[[:space:]]*device:[[:space:]]*/,"",line); gsub(/[[:space:]]/,"",line); print toupper(line); exit}' "$$ASR_CFG_PATH"); \
-		echo "  ASR_CFG_PROVIDER  = $$ASR_CFG_PROVIDER (from $$ASR_CFG_PATH)"; \
-		echo "  ASR_CFG_DEVICE    = $$ASR_CFG_DEVICE (from $$ASR_CFG_PATH)"; \
-	fi
 	@echo ""
 	@echo "$(YELLOW)Authentication:$(NC)"
 	@echo "  HF_TOKEN          = $$([ -n '$(HF_TOKEN)' ] && echo '***set***' || echo 'NOT SET')"
@@ -483,26 +345,28 @@ build: check-env ## Build (REGISTRY=false) or pull (REGISTRY=true) all images
 	@echo "$(BLUE)Preparing Docker images...$(NC)"
 	@if [ "$(REGISTRY)" = "false" ] || [ "$(REGISTRY)" = "FALSE" ]; then \
 		echo "$(YELLOW)  REGISTRY=false → Building local services from source$(NC)"; \
-		$(call RUN_COMPOSE_WITH_RUNTIME_NPU,REGISTRY=$(_DOCKER_REGISTRY),$(_IDENTITY_PROFILE) build $(LOCAL_ONLY_SERVICES) $(_IDENTITY_SVC)); \
+		REGISTRY=$(_DOCKER_REGISTRY) $(COMPOSE_BASE) $(_IDENTITY_PROFILE) build $(LOCAL_ONLY_SERVICES) $(_IDENTITY_SVC); \
 	else \
 		echo "$(YELLOW)  REGISTRY=$(REGISTRY) → Pulling images from registry$(NC)"; \
-		$(call RUN_COMPOSE_WITH_RUNTIME_NPU,REGISTRY=$(REGISTRY),pull $(LOCAL_ONLY_SERVICES)); \
+		REGISTRY=$(REGISTRY) $(COMPOSE_BASE) pull $(LOCAL_ONLY_SERVICES); \
 		if [ -n "$(_IDENTITY_SVC)" ]; then \
 			echo "$(YELLOW)  Building identity-service locally (no registry image)...$(NC)"; \
-			$(call RUN_COMPOSE_WITH_RUNTIME_NPU,REGISTRY=$(_DOCKER_REGISTRY),$(_IDENTITY_PROFILE) build identity-service); \
+			REGISTRY=$(_DOCKER_REGISTRY) $(COMPOSE_BASE) $(_IDENTITY_PROFILE) build identity-service; \
 		fi; \
 	fi; \
-	echo "$(YELLOW)  Pulling audio-analyzer, text-to-speech from Docker Hub (edge-ai-libraries — separate repo, no local build)...$(NC)"; \
-	$(call RUN_COMPOSE_WITH_RUNTIME_NPU,REGISTRY=$(_DOCKER_REGISTRY),pull $(REGISTRY_ONLY_SERVICES))
+	echo "$(YELLOW)  Pulling audio-analyzer, text-to-speech, and metrics-collector from registry...$(NC)"; \
+	REGISTRY=$(_DOCKER_REGISTRY) $(COMPOSE_BASE) pull audio-analyzer text-to-speech; \
+	REGISTRY=$(_DOCKER_REGISTRY) $(COMPOSE_BASE) pull metrics-collector || \
+		echo "$(YELLOW)  ⚠ Could not pull metrics-collector (intel/hl-ai-metrics-collector) from registry -- using locally cached image if present. Build it from edge-ai-suites/health-and-life-sciences-ai-suite/multi_modal_patient_monitoring/services/metrics-collector if missing.$(NC)"
 	@echo "$(GREEN)✓ Images ready$(NC)"
 
 # =============================================================================
 # Up / Down
 # =============================================================================
 
-up: check-env setup-dirs ## Start all services
+up: check-env setup-dirs clean-metrics ## Start all services
 	@echo "$(BLUE)Starting Smart Kiosk Assistant...$(NC)"
-	@$(call RUN_COMPOSE_WITH_RUNTIME_NPU,REGISTRY=$(_DOCKER_REGISTRY),$(_IDENTITY_PROFILE) up -d)
+	REGISTRY=$(_DOCKER_REGISTRY) $(COMPOSE_BASE) $(_IDENTITY_PROFILE) up -d
 	@echo ""
 	@echo "$(GREEN)✓ Stack started$(NC)"
 	@echo "  Kiosk UI        → http://localhost:7860"
@@ -516,7 +380,18 @@ up: check-env setup-dirs ## Start all services
 
 down: ## Stop all services
 	@echo "$(BLUE)Stopping Smart Kiosk Assistant...$(NC)"
-	$(COMPOSE_BASE) $(_IDENTITY_PROFILE) down
+	@# Always tear down with --profile identity enabled, regardless of the
+	@# IDENTITY/.env value at the time `down` is invoked. Compose scopes
+	@# `down` to the same profile-filtered service set as `up`; if identity
+	@# was started with `make up IDENTITY=true` and the stack is later
+	@# stopped with a plain `make down` (IDENTITY unset/false), compose
+	@# never considers identity-service part of the project and leaves it
+	@# (and the network it's attached to) running — this is what caused
+	@# "Network ... Resource is still in use" and an orphaned
+	@# identity-service container. Including the profile unconditionally on
+	@# `down` is a no-op when identity-service was never started.
+	$(COMPOSE_BASE) --profile identity down
+	@$(MAKE) --no-print-directory clean-metrics
 	@echo "$(GREEN)✓ All services stopped$(NC)"
 
 restart: down up ## Stop then restart all services
@@ -610,8 +485,8 @@ dev-build: ## Rebuild and restart a single service: make dev-build SVC=rag-servi
 		exit 1; \
 	fi
 	@echo "$(BLUE)Rebuilding $(SVC)...$(NC)"
-	@$(call RUN_COMPOSE_WITH_RUNTIME_NPU,,build $(SVC))
-	@$(call RUN_COMPOSE_WITH_RUNTIME_NPU,,$(_IDENTITY_PROFILE) up -d $(SVC))
+	$(COMPOSE_BASE) build $(SVC)
+	$(COMPOSE_BASE) up -d $(SVC)
 	@echo "$(GREEN)✓ $(SVC) rebuilt and restarted$(NC)"
 
 # =============================================================================
@@ -621,5 +496,35 @@ dev-build: ## Rebuild and restart a single service: make dev-build SVC=rag-servi
 clean: ## Stop containers and remove named volumes
 	@echo "$(BLUE)Stopping services and removing volumes...$(NC)"
 	$(COMPOSE_BASE) down -v
+	@$(MAKE) --no-print-directory clean-metrics
 	@echo "$(GREEN)✓ Containers stopped and volumes removed$(NC)"
 	@echo "  Note: models/ directory is preserved. Delete it manually to free ~4 GB."
+
+clean-metrics: ## Delete collected OS metrics dumps (metrics/)
+	@# The OS-level collectors write into ./metrics (bind-mounted to
+	@# /tmp/results). qmassa in particular accumulates a single JSON that grows
+	@# without bound -- measured at ~596 MB/hour, 2.4 GB after four hours -- and
+	@# nothing removed it between runs, so it accrued across the machine's whole
+	@# lifetime rather than a single session.
+	@#
+	@# Docker creates the bind-mount directory root-owned, so a plain host-side
+	@# `rm` gets EACCES. Deleting a file needs write permission on its *parent*
+	@# directory, not on the file, so the fallback empties the directory from
+	@# inside a root container and the host then recreates it owned by the
+	@# invoking user -- which is what stops the permission problem recurring.
+	@if [ -d metrics ]; then \
+		sz=$$(du -sh metrics 2>/dev/null | cut -f1); \
+		if ! rm -rf metrics 2>/dev/null; then \
+			echo "  metrics/ is root-owned; clearing it via a container..."; \
+			$(COMPOSE_BASE) run --rm --no-deps --user root --entrypoint sh \
+				metrics-collector -c 'rm -rf /tmp/results/* /tmp/results/.[!.]*' \
+				>/dev/null 2>&1 || true; \
+			rm -rf metrics 2>/dev/null || true; \
+		fi; \
+		if [ -d metrics ]; then \
+			echo "$(YELLOW)⚠ Could not fully remove metrics/ (needs root: sudo rm -rf metrics)$(NC)"; \
+		else \
+			echo "$(GREEN)✓ Cleared metrics/ (freed $$sz)$(NC)"; \
+		fi; \
+	fi
+	@mkdir -p metrics

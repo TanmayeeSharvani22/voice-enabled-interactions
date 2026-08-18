@@ -128,6 +128,8 @@ class TestOrderingProducts:
             "name": "Crispy Veg Patty Burger",
             "category": "burgers",
             "price": 129.0,
+            "is_bestseller": True,
+            "is_veg": True,
         }
 
         missing = ordering_app.get("/api/v1/products/DOES-NOT-EXIST")
@@ -228,6 +230,181 @@ class TestOrderingUpsell:
         )
         assert irrelevant.status_code == 200
         assert irrelevant.json() == []
+
+
+@pytest.mark.tier1
+class TestOrderingProductResolution:
+    """``OrderingService.resolve_product`` fuzzy-matching coverage.
+
+    Regression coverage for a real bug: "spicy chicken burger" resolved to
+    "Classic Chicken Burger" instead of "Spicy Chicken Crunch Burger",
+    because a plain difflib ratio scored "Classic Chicken Burger" (0.857)
+    marginally higher than the correct match (0.851), losing the customer's
+    distinguishing word "spicy" entirely. The fix checks for a unique,
+    all-query-tokens-present match before falling back to the ratio.
+    """
+
+    @pytest.mark.tier1
+    def test_distinguishing_token_wins_over_marginally_closer_ratio_match(
+        self,
+        ordering_app: TestClient,
+    ):
+        from kiosk_core.ordering.service import OrderingService  # noqa: PLC0415
+        from kiosk_core import config as kiosk_config  # noqa: PLC0415
+
+        service = OrderingService(upsell_rules_path=kiosk_config.UPSELL_RULES_YAML_PATH)
+        import asyncio  # noqa: PLC0415
+
+        product = asyncio.run(service.resolve_product("spicy chicken burger"))
+        assert product is not None
+        assert product.name == "Spicy Chicken Crunch Burger"
+
+    @pytest.mark.tier1
+    def test_generic_reference_still_resolves_via_ratio_fallback(
+        self,
+        ordering_app: TestClient,
+    ):
+        from kiosk_core.ordering.service import OrderingService  # noqa: PLC0415
+        from kiosk_core import config as kiosk_config  # noqa: PLC0415
+
+        service = OrderingService(upsell_rules_path=kiosk_config.UPSELL_RULES_YAML_PATH)
+        import asyncio  # noqa: PLC0415
+
+        # No exact token-subset match exists for a misheard/partial name —
+        # must still fall back to the difflib ratio step.
+        product = asyncio.run(service.resolve_product("classic chiken burgr"))
+        assert product is not None
+        assert product.name == "Classic Chicken Burger"
+
+    @pytest.mark.tier1
+    def test_off_menu_item_sharing_words_with_multiple_products_is_unresolved(
+        self,
+        ordering_app: TestClient,
+    ):
+        """Regression for a live bug: "chicken tikka burger" is not on the
+        menu, but pure difflib ratio resolved it to "Paneer Tikka Burger" —
+        the wrong dietary category (veg instead of the non-veg item the
+        customer actually asked for) — because character similarity scored
+        it higher (0.718) than "Classic Chicken Burger" (0.667), which
+        actually shares the dietary-defining word "chicken". The reference
+        ties on word-overlap between "Classic Chicken Burger", "Spicy Chicken
+        Crunch Burger", and "Paneer Tikka Burger" (2 shared words each), so it
+        must be rejected as ambiguous rather than silently guessed.
+        """
+        from kiosk_core.ordering.service import OrderingService  # noqa: PLC0415
+        from kiosk_core import config as kiosk_config  # noqa: PLC0415
+
+        service = OrderingService(upsell_rules_path=kiosk_config.UPSELL_RULES_YAML_PATH)
+        import asyncio  # noqa: PLC0415
+
+        product = asyncio.run(service.resolve_product("chicken tikka burger"))
+        assert product is None
+
+    @pytest.mark.tier1
+    def test_detailed_resolution_reports_match_status_and_confidence(
+        self,
+        ordering_app: TestClient,
+    ):
+        from kiosk_core.ordering.service import OrderingService  # noqa: PLC0415
+        from kiosk_core import config as kiosk_config  # noqa: PLC0415
+        import asyncio  # noqa: PLC0415
+
+        service = OrderingService(upsell_rules_path=kiosk_config.UPSELL_RULES_YAML_PATH)
+        result = asyncio.run(service.resolve_product_detailed("Classic Chicken Burger"))
+        assert result.status == "MATCH"
+        assert result.product is not None
+        assert result.product.name == "Classic Chicken Burger"
+        assert result.confidence == 1.0
+        assert result.candidates == []
+
+    @pytest.mark.tier1
+    def test_detailed_resolution_reports_ambiguous_status_with_candidates(
+        self,
+        ordering_app: TestClient,
+    ):
+        """Same scenario as
+        ``test_off_menu_item_sharing_words_with_multiple_products_is_unresolved``,
+        but asserting the richer status: ``resolve_product`` collapses this to
+        ``None``, while ``resolve_product_detailed`` must distinguish a
+        genuine tie (AMBIGUOUS) from no match at all (NOT_FOUND) so a caller
+        can offer the tied candidates back to the customer.
+        """
+        from kiosk_core.ordering.service import OrderingService  # noqa: PLC0415
+        from kiosk_core import config as kiosk_config  # noqa: PLC0415
+        import asyncio  # noqa: PLC0415
+
+        service = OrderingService(upsell_rules_path=kiosk_config.UPSELL_RULES_YAML_PATH)
+        result = asyncio.run(service.resolve_product_detailed("chicken tikka burger"))
+        assert result.status == "AMBIGUOUS"
+        assert result.product is None
+        assert len(result.candidates) >= 2
+        names = {c.name for c in result.candidates}
+        assert "Classic Chicken Burger" in names
+
+    @pytest.mark.tier1
+    def test_detailed_resolution_reports_not_found_status(
+        self,
+        ordering_app: TestClient,
+    ):
+        from kiosk_core.ordering.service import OrderingService  # noqa: PLC0415
+        from kiosk_core import config as kiosk_config  # noqa: PLC0415
+        import asyncio  # noqa: PLC0415
+
+        service = OrderingService(upsell_rules_path=kiosk_config.UPSELL_RULES_YAML_PATH)
+        result = asyncio.run(service.resolve_product_detailed("a sushi platter with eel"))
+        assert result.status == "NOT_FOUND"
+        assert result.product is None
+        assert result.candidates == []
+
+    @pytest.mark.tier1
+    def test_valid_item_embedded_in_a_noisy_compound_utterance_still_resolves(
+        self,
+        ordering_app: TestClient,
+    ):
+        """Regression for a live bug: after a compound utterance the agent
+        forwarded a noisy full-sentence reference (not a clean item name) to
+        ``place_order``, and a real, unambiguous menu item — "Paneer Tikka
+        Burger" — was rejected as off-menu. Every prior resolution step only
+        checks whether the (short) REFERENCE fits inside a (longer) product
+        NAME, never the reverse — so a reference longer than every product
+        name (because it carries filler words) could never match, no matter
+        how clearly it names a real product. The fix adds a whole-word
+        reverse-substring check: does a catalogue name appear verbatim,
+        word-bounded, inside the noisy reference?
+        """
+        from kiosk_core.ordering.service import OrderingService  # noqa: PLC0415
+        from kiosk_core import config as kiosk_config  # noqa: PLC0415
+        import asyncio  # noqa: PLC0415
+
+        service = OrderingService(upsell_rules_path=kiosk_config.UPSELL_RULES_YAML_PATH)
+        product = asyncio.run(
+            service.resolve_product(
+                "yes please go ahead and add the paneer tikka burger to my order"
+            )
+        )
+        assert product is not None
+        assert product.name == "Paneer Tikka Burger"
+
+    @pytest.mark.tier1
+    def test_reverse_substring_match_does_not_fire_on_partial_word_fragments(
+        self,
+        ordering_app: TestClient,
+    ):
+        """A product name must never match as a fragment inside an unrelated
+        longer word in the noisy reference (e.g. a name like "tea" must not
+        match inside "steak") — the reverse-substring check requires whole
+        word boundaries on both sides.
+        """
+        from kiosk_core.ordering.service import OrderingService  # noqa: PLC0415
+        from kiosk_core import config as kiosk_config  # noqa: PLC0415
+        import asyncio  # noqa: PLC0415
+
+        service = OrderingService(upsell_rules_path=kiosk_config.UPSELL_RULES_YAML_PATH)
+        result = asyncio.run(
+            service.resolve_product_detailed("I would like some grilled steak please")
+        )
+        assert result.status == "NOT_FOUND"
+
 
 
 @pytest.mark.tier1

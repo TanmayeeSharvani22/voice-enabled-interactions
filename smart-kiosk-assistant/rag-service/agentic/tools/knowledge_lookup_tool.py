@@ -79,7 +79,27 @@ _PIN_ROOT_SECTION = os.getenv("RAG_PIN_ROOT_SECTION", "true").strip().lower() in
 _PIN_MAX_CHARS = int(os.getenv("RAG_PIN_MAX_CHARS", "1300"))
 _ROOT_SECTION_RE = re.compile(r"^\[Context:\s*([^\]]*)\]")
 
+# Administrative / regulatory fields that must never reach the model.
+# Stripped from the pinned root section at build time so the model cannot
+# echo them (which triggers the _ADMIN_LEAK_RE guard and substitutes a
+# fallback, causing the "I don't have that detail" regression).
+#
+# Pattern strips field segments at three granularities:
+#  - inline in blockquote: "· Outlet Code: QBE-CHN-001 ·" or "· Outlet Code: QBE-CHN-001"
+#  - bullet sub-field: "| **FSSAI License**: 10015033005321"
+#  - whole bullet: "- **GST Registration**: 33AAACQ5678G1ZM"
+_ADMIN_PIN_FIELD_RE = re.compile(
+    r"(?:(?:\s*[|·]\s*)?(?:\*\*)?(?:Outlet Code|FSSAI License|GST Registration|Parent Company)"
+    r"(?:\*\*)?\s*:?[^|·\n]*(?:[|·])?)",
+    re.IGNORECASE,
+)
+
 _pinned_context: str | None = None
+_root_facts_cache: dict[str, str] | None = None
+
+# Parses "- **Field Name**: value" bullets out of the pinned root section.
+# Several fields may share one markdown bullet, separated by " | ".
+_ROOT_FIELD_RE = re.compile(r"\*\*([^*]+)\*\*:\s*([^|\n]+)")
 
 
 def reset_pinned_context() -> None:
@@ -91,10 +111,51 @@ def reset_pinned_context() -> None:
     (restaurant name, opening hours) as authoritative — the customer is told
     the old restaurant's details with full confidence.
     """
-    global _pinned_context
+    global _pinned_context, _root_facts_cache
     if _pinned_context:
         logger.info("[TOOL:knowledge_lookup] Knowledge base changed — clearing pinned root section")
     _pinned_context = None
+    _root_facts_cache = None
+
+
+def root_facts(pipeline=None) -> dict[str, str]:
+    """Return venue-level facts parsed out of the pinned root section.
+
+    The root section (see ``_root_section``) is markdown bullets of the form
+    ``- **Field**: value``. Parsing it into a dict lets simple, single-value
+    facts (restaurant name, hours, breakfast hours) be spoken back verbatim
+    without an LLM paraphrasing them — see ``reply_templates.speak_root_fact``
+    for why that matters: a quantised model measurably merges distinct hour
+    ranges and invents details (e.g. a public-holiday closure) that are not in
+    the source text.
+
+    Args:
+        pipeline: The shared ``RagPipeline``, or ``None`` to fetch it lazily
+            (avoids importing ``pipeline`` at module load for tests).
+
+    Returns:
+        A dict keyed by lower-cased, stripped field name (e.g. ``"hours"``,
+        ``"brand name"``, ``"breakfast hours"``). Empty when no root section
+        was found — callers must treat that as "fall back to the LLM path".
+    """
+    global _root_facts_cache
+    if _root_facts_cache is not None:
+        return _root_facts_cache
+
+    if pipeline is None:
+        from pipeline import get_shared_pipeline  # rag-service module
+
+        pipeline = get_shared_pipeline()
+
+    text = _root_section(pipeline)
+    facts: dict[str, str] = {}
+    for match in _ROOT_FIELD_RE.finditer(text):
+        key = match.group(1).strip().lower()
+        value = match.group(2).strip().rstrip(".")
+        if key and value:
+            facts[key] = value
+    _root_facts_cache = facts
+    return facts
 
 
 def _root_section(pipeline) -> str:
@@ -125,10 +186,20 @@ def _root_section(pipeline) -> str:
                 roots.append(text)
         if roots:
             # Prefer the densest root block when a corpus has several docs.
-            _pinned_context = max(roots, key=len)[:_PIN_MAX_CHARS]
+            raw = max(roots, key=len)[:_PIN_MAX_CHARS]
+            # Strip admin/regulatory fields before the model sees the context.
+            cleaned = _ADMIN_PIN_FIELD_RE.sub("", raw)
+            # Drop lines that became empty after stripping (e.g. a bullet that
+            # held only the GST registration).
+            lines = [
+                ln for ln in cleaned.splitlines()
+                if ln.strip() and ln.strip() not in {"-", "·", "|"}
+            ]
+            _pinned_context = "\n".join(lines)
             logger.info(
-                "[TOOL:knowledge_lookup] Pinned root section (%d chars)",
+                "[TOOL:knowledge_lookup] Pinned root section (%d chars, %d stripped)",
                 len(_pinned_context),
+                len(raw) - len(_pinned_context),
             )
         else:
             logger.warning(
@@ -173,6 +244,54 @@ _USE_LIST_PRODUCTS = (
     "from memory."
 )
 
+# Same failure mode as _PRICE_QUERY_RE, different phrasing: "what's popular /
+# your favourite / most ordered" is still a catalogue question — the answer is
+# a specific dish name and price, not marketing prose. Observed live: "show me
+# restaurant favourite dishes" against this knowledge base returned one real
+# item (Chicken Tikka Kathi Roll, ₹169 — correctly [HIT]-tagged in the source)
+# plus two fabricated ones ("Butter Chicken Wrap ₹179", "Crispy Chicken
+# Burrito ₹179") that do not exist anywhere in the catalogue. The bestseller
+# flag is catalogue data (``Product.is_bestseller``, seeded from the same
+# products.yaml that prices come from) — ``get_popular_products`` is the
+# authoritative source, never free-text retrieval.
+_POPULARITY_QUERY_RE = re.compile(
+    r"\b(?:popular|favou?rite\w*|bestsell\w*|best.selling|most.order\w*|"
+    r"top.selling|recommend\w*|suggest\w*)\b",
+    re.IGNORECASE,
+)
+
+_USE_GET_POPULAR_PRODUCTS = (
+    "This question asks what is popular/most-ordered/recommended. The "
+    "knowledge base is not authoritative for this and using it would invent "
+    "dishes that do not exist. Call `get_popular_products` instead and answer "
+    "only from its result. Do not answer this question from the knowledge "
+    "base or from memory."
+)
+
+# Questions fully answered by the pinned root section (see _root_section
+# above): the same ~14 venue-level facts the root chunk covers in one block.
+# Retrieval scores are not a reliable relevance signal at this corpus size —
+# measured live, an unrelated "Breakfast Menu > Veg Breakfast" chunk (Poha,
+# Upma prices) scored -6.84, just inside the -7.0 rerank threshold, and was
+# appended to a "restaurant name and opening hours" question the pinned
+# section already answered in full. Supplementary retrieval adds noise, not
+# coverage, for these questions, so it is skipped outright rather than tuned
+# via a corpus-dependent threshold.
+_ROOT_ONLY_QUERY_RE = re.compile(
+    r"\b(?:restaurant('?s)? name|name of (?:the|this) (?:restaurant|outlet|place)|"
+    r"(?:what|which).{0,20}(?:restaurant|outlet|place).{0,10}(?:called|name)|"
+    r"opening hours?|closing hours?|operating hours?|business hours?|"
+    r"what time (?:do|does) (?:you|it|the restaurant|the outlet).{0,10}(?:open|close)|"
+    r"(?:open|close|working|business) (?:on|hours?)|"
+    r"breakfast (?:hours?|timings?)|kitchen clos\w*|last order\w*|"
+    r"parking|wi-?fi\b|wifi\b|delivery (?:radius|available|options?|area)|"
+    r"take.?away|dine.?in|seating capacity|loyalty program|"
+    r"catering|bulk orders?|outlet code|fssai|gst\b|"
+    r"(?:restaurant|outlet) address|(?:your|the) address|location\b|"
+    r"phone number|contact (?:number|details)|payment methods?)\b",
+    re.IGNORECASE,
+)
+
 
 def _format_sources(records, budget: int = _MAX_CONTEXT_CHARS) -> str:
     """Render retrieval records into a compact, numbered context block."""
@@ -194,6 +313,14 @@ def _format_sources(records, budget: int = _MAX_CONTEXT_CHARS) -> str:
     return "\n\n".join(blocks)
 
 
+# Results that are NOT knowledge-base context: a redirect to the catalogue
+# tool, or an honest "nothing found". Callers that want to *pre-ground* a turn
+# with retrieved context (see ordering_agent's PREGROUND_KNOWLEDGE) must be
+# able to tell these apart from real context, since injecting either into the
+# prompt as if it were fact would be actively misleading.
+NON_CONTEXT_RESULTS = frozenset({_NO_CONTEXT, _USE_LIST_PRODUCTS, _USE_GET_POPULAR_PRODUCTS})
+
+
 async def knowledge_lookup(question: str) -> str:
     """Look up facts about hours, ingredients, allergens, policies, or outlet information.
 
@@ -202,7 +329,9 @@ async def knowledge_lookup(question: str) -> str:
 
     Do NOT use this tool for prices, product availability, or menu listings —
     call ``list_products`` for those, it is the only authoritative source for
-    product names and prices. Do NOT use it for placing, updating, or
+    product names and prices. Do NOT use it for "what's popular / your
+    favourites / most ordered / what do you recommend" — call
+    ``get_popular_products`` for those. Do NOT use it for placing, updating, or
     confirming orders.
 
     Args:
@@ -222,13 +351,36 @@ async def knowledge_lookup(question: str) -> str:
         )
         return _USE_LIST_PRODUCTS
 
+    # Refuse popularity/recommendation questions — see _POPULARITY_QUERY_RE.
+    # Checked before the KB-override carve-out below would otherwise apply,
+    # since "popular"/"recommend" never co-occurs with a genuine KB override
+    # term in a way that changes which tool is authoritative.
+    if _POPULARITY_QUERY_RE.search(question):
+        logger.info(
+            "[TOOL:knowledge_lookup] Redirecting popularity question to get_popular_products: %r",
+            question[:120],
+        )
+        return _USE_GET_POPULAR_PRODUCTS
+
     started = time.perf_counter()
     try:
         from pipeline import get_shared_pipeline  # rag-service module
 
         pipeline = get_shared_pipeline()
         pinned = _root_section(pipeline)
-        records = pipeline.retrieve(question)
+
+        root_only = bool(pinned) and bool(_ROOT_ONLY_QUERY_RE.search(question))
+        if root_only:
+            # The pinned block already answers this question in full — skip
+            # retrieval entirely rather than risk a marginal-score, off-topic
+            # chunk (e.g. a menu item) being appended as if it were relevant.
+            records = []
+            logger.info(
+                "[TOOL:knowledge_lookup] Root-covered question — skipping "
+                "supplementary retrieval: %r", question[:120],
+            )
+        else:
+            records = pipeline.retrieve(question)
 
         # The root section is frequently also returned by retrieval. Paying
         # for it twice would evict the question-specific chunk that retrieval

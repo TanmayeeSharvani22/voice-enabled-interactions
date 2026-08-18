@@ -53,7 +53,7 @@ class OVMSLLMService:
         )
         self._client = OpenAI(base_url=self._base_url, api_key="unused")
 
-        logger.info("[OVMS-LLM] Loading tokenizer from HF id=%s (local only)", hf_id)
+        logger.info("[OVMS-LLM] Loading tokenizer from HF id=%s", hf_id)
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(hf_id, fix_mistral_regex=True)
         except TypeError:

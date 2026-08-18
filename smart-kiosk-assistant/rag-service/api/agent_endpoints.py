@@ -11,8 +11,14 @@ POST /api/v1/agent/chat
     reply          str        — agent's text response
     tool_calls     list[str]  — tools invoked during this turn
     llm_ms         float|None — cumulative genuine LLM time for the turn
+    llm_ttft_ms    float|None — cumulative prefill/time-to-first-token
     llm_calls      int        — number of LLM round-trips for the turn
     retrieval_ms   float|None — knowledge-base retrieval time for the turn
+    mcp_ms         float|None — cumulative MCP tool round-trip time for the turn
+    mcp_calls      int        — number of MCP tool round-trips for the turn
+    guard_ms       float|None — cumulative truthfulness-guard processing time
+    template_ms    float|None — deterministic reply-template render time
+    templated      bool       — True when the narration LLM call was skipped
 """
 
 from __future__ import annotations
@@ -50,7 +56,17 @@ class AgentChatResponse(BaseModel):
     tool_calls: list[str] = Field(default_factory=list)
     llm_ms: float | None = Field(
         default=None,
-        description="Cumulative LLM round-trip time for this turn, in milliseconds",
+        description=(
+            "Cumulative LLM round-trip time for this turn, in milliseconds. "
+            "Covers prefill AND decode — the full stream, not just first token."
+        ),
+    )
+    llm_ttft_ms: float | None = Field(
+        default=None,
+        description=(
+            "Cumulative time-to-first-token for this turn, in milliseconds. "
+            "llm_ms - llm_ttft_ms is the decode (token generation) cost."
+        ),
     )
     llm_calls: int = Field(
         default=0,
@@ -61,6 +77,40 @@ class AgentChatResponse(BaseModel):
         description=(
             "Knowledge-base retrieval time for this turn, in milliseconds. "
             "None when the agent did not call knowledge_lookup."
+        ),
+    )
+    mcp_ms: float | None = Field(
+        default=None,
+        description=(
+            "Cumulative MCP tool round-trip time for this turn, in "
+            "milliseconds (network + kiosk-core request handling, including "
+            "its SQLite time). None when no MCP tool was called."
+        ),
+    )
+    mcp_calls: int = Field(
+        default=0,
+        description="Number of MCP tool round-trips made during this turn",
+    )
+    guard_ms: float | None = Field(
+        default=None,
+        description=(
+            "Cumulative time spent in the truthfulness guards (menu/removal/"
+            "confirm result recording and whole-reply validation), in "
+            "milliseconds. None when no guard-relevant tool ran this turn."
+        ),
+    )
+    template_ms: float | None = Field(
+        default=None,
+        description=(
+            "Time spent rendering a deterministic reply template, in "
+            "milliseconds. None when no template was attempted this turn."
+        ),
+    )
+    templated: bool = Field(
+        default=False,
+        description=(
+            "True when a deterministic template produced the reply, meaning "
+            "the second (narration) LLM call was skipped for this turn."
         ),
     )
 
@@ -87,9 +137,10 @@ async def agent_chat(request: AgentChatRequest) -> AgentChatResponse:
     )
 
     try:
-        from agentic.ordering_agent import get_ordering_agent
+        from agentic.plugin_loader import load_agent_factory
 
-        agent = get_ordering_agent()
+        _agent_factory = load_agent_factory()
+        agent = _agent_factory()
         result = await agent.chat(
             message=request.transcription,
             session_id=request.session_id,
@@ -110,8 +161,14 @@ async def agent_chat(request: AgentChatRequest) -> AgentChatResponse:
         reply=result["reply"],
         tool_calls=result.get("tool_calls", []),
         llm_ms=result.get("llm_ms"),
+        llm_ttft_ms=result.get("llm_ttft_ms"),
         llm_calls=result.get("llm_calls", 0),
         retrieval_ms=result.get("retrieval_ms"),
+        mcp_ms=result.get("mcp_ms"),
+        mcp_calls=result.get("mcp_calls", 0),
+        guard_ms=result.get("guard_ms"),
+        template_ms=result.get("template_ms"),
+        templated=result.get("templated", False),
     )
 
 
@@ -142,9 +199,10 @@ async def agent_chat_stream(request: AgentChatRequest) -> StreamingResponse:
 
     async def run() -> None:
         try:
-            from agentic.ordering_agent import get_ordering_agent
+            from agentic.plugin_loader import load_agent_factory
 
-            agent = get_ordering_agent()
+            _agent_factory = load_agent_factory()
+            agent = _agent_factory()
             result = await agent.chat(
                 message=request.transcription,
                 session_id=request.session_id,

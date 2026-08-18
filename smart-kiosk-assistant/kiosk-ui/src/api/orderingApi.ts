@@ -1,6 +1,15 @@
 import { endpoints } from '../constants';
 import type { Order, Product, UpsellSuggestion } from '../types';
 
+/** Format a value in Indian Rupees, dropping a trailing .0 for whole values (matches the agent's replies). */
+export const formatCurrency = (value: number | undefined): string => {
+  const rounded = Math.round((value ?? 0) * 100) / 100;
+  return `₹${Number.isInteger(rounded) ? rounded : rounded.toFixed(2)}`;
+};
+
+/** Matches the order id the agent speaks (e.g. "ORD-11"), no zero-padding. */
+export const formatOrderId = (orderId: number): string => `ORD-${orderId}`;
+
 /** Fetch the full product catalogue (restaurant menu). */
 export async function fetchMenu(): Promise<Product[]> {
   try {
@@ -34,6 +43,26 @@ export async function fetchCurrentOrder(userId: string): Promise<Order | null> {
     return data ?? null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Discard the user's open draft cart.
+ *
+ * Called once when the customer screen mounts so a new conversation always
+ * starts from an empty cart: the cart lives server-side in SQLite, so without
+ * this a page refresh would resurface the previous customer's abandoned items.
+ * Returns true when the backend acknowledged the reset.
+ */
+export async function clearCurrentOrder(userId: string): Promise<boolean> {
+  try {
+    const res = await fetch(endpoints.currentOrder(userId), {
+      method: 'DELETE',
+      signal: AbortSignal.timeout(4000),
+    });
+    return res.ok;
+  } catch {
+    return false;
   }
 }
 
