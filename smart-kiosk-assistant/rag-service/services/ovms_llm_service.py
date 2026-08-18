@@ -55,9 +55,11 @@ class OVMSLLMService:
 
         logger.info("[OVMS-LLM] Loading tokenizer from HF id=%s (local only)", hf_id)
         try:
-            self.tokenizer = AutoTokenizer.from_pretrained(hf_id, fix_mistral_regex=True)
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                hf_id, fix_mistral_regex=True, local_files_only=True
+            )
         except TypeError:
-            self.tokenizer = AutoTokenizer.from_pretrained(hf_id)
+            self.tokenizer = AutoTokenizer.from_pretrained(hf_id, local_files_only=True)
 
     # ── public API (mirrors LLMService) ─────────────────────────────
 

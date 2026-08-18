@@ -29,12 +29,18 @@ import { AskBar } from './AskBar';
  * screens.
  */
 export function CustomerApp() {
-  const { devices, selectedId, setSelectedId } = useMicDevices();
-  // Kiosk hardware has one fixed mic; auto-select the first available device
-  // rather than exposing a device picker (no Settings tab on this screen).
-  useEffect(() => {
-    if (!selectedId && devices.length > 0) setSelectedId(devices[0].deviceId);
-  }, [devices, selectedId, setSelectedId]);
+  // This screen has no device picker (no Settings tab), so it deliberately
+  // never pins a deviceId constraint on getUserMedia (see useVoiceSession
+  // call below, which passes deviceId: ''). Kiosk hardware here can expose
+  // several input devices at once (e.g. a webcam mic alongside a Bluetooth
+  // headset); forcing devices[0] previously grabbed whichever one the
+  // browser happened to enumerate first -- not necessarily the OS's actual
+  // default input -- which silently ignored a correctly-connected Bluetooth
+  // headset. Leaving the constraint unset lets the browser fall back to the
+  // OS-level default input device, which is already routed correctly.
+  // useMicDevices() is still invoked for its side effect of priming the mic
+  // permission prompt early (see its internal getUserMedia call).
+  useMicDevices();
 
   const [queueInfo, setQueueInfo] = useState<QueueInfo | null>(null);
   const [showFullMenu, setShowFullMenu] = useState(false);
@@ -120,7 +126,7 @@ export function CustomerApp() {
     startConversation,
     endConversation,
     interruptSpeaking,
-  } = useVoiceSession({ deviceId: selectedId, enabled: true, onTurnComplete });
+  } = useVoiceSession({ deviceId: '', enabled: true, onTurnComplete });
 
   const cartActive = phase === 'listening' || phase === 'processing' || playbackState !== 'idle';
 
