@@ -89,6 +89,11 @@ services:
       # Derive RTSP URL from the same STREAM_NAME that rtsp-streamer publishes,
       # so changing the media file in one place keeps the pipeline in sync.
       QUEUE_SERVICE__SOURCE__RTSP_URL: "rtsp://rtsp-streamer:8554/${STREAM_NAME:-queue}"
+      # Inference device for the YOLO26 person detector. Defaults to CPU
+      # (see queue-config.yaml `model.device` for rationale). Override via
+      # QUEUE_DEVICE=GPU|NPU in .env once the target platform supports it —
+      # no rebuild required.
+      QUEUE_SERVICE__MODEL__DEVICE: ${QUEUE_DEVICE:-CPU}
       NO_PROXY: "localhost,127.0.0.1,rtsp-streamer,queue-service"
       no_proxy: "localhost,127.0.0.1,rtsp-streamer,queue-service"
       ZE_ENABLE_ALT_DRIVERS: libze_intel_npu.so
@@ -128,23 +133,27 @@ services:
   #   GET /memory         -> latest memory snapshot
   # ---------------------------------------------------------------------------
   metrics-collector:
-    build:
-      context: ./kiosk_core/metrics-collector
-      dockerfile: Dockerfile
-    # Built from ./kiosk_core/metrics-collector rather than pulled.
+    # Pulled, not built. The source of truth for this image now lives in the
+    # edge-ai-suites repo (health-and-life-sciences-ai-suite/
+    # multi_modal_patient_monitoring/services/metrics-collector), shared with
+    # the multi-modal patient monitoring suite.
     #
-    # This service was previously pinned to the released
-    # hl-ai-metrics-collector:2026.1.0 image. That image predates the current
-    # source tree and does not serve /health at all, so the healthcheck below
-    # could never pass (observed FailingStreak: 1274). It also runs the older
-    # single-threaded http.server implementation, which serialised every
-    # request behind an unbounded qmassa JSON parse and made the dashboard's
-    # /metrics poll take 20-40 s -- long enough that the browser gave up and
-    # the performance charts stayed empty.
+    # This service was previously built locally from ./kiosk_core/metrics-
+    # collector because the then-published hl-ai-metrics-collector:2026.1.0
+    # image predated the current source tree: it had no /health endpoint at
+    # all (the healthcheck below could never pass — observed FailingStreak:
+    # 1274), ran the older single-threaded http.server implementation
+    # (serialised every request behind an unbounded qmassa JSON parse, making
+    # the dashboard's /metrics poll take 20-40 s), and let qmassa's JSON grow
+    # without bound (~596 MB/hour).
     #
-    # The tag is suffixed to make clear this is a locally built artifact and
-    # to avoid shadowing the published 2026.1.0 image with different content.
-    image: ${REGISTRY:-intel}/metrics-collector:${RELEASE_TAG:-2026.1.0}
+    # Those fixes (FastAPI + uvicorn, /health, bounded qmassa collection via
+    # collect_gpu.sh) have since been merged back into the edge-ai-suites
+    # source, published as hl-ai-metrics-collector:2026.2.0-rc2, so this
+    # service can go back to pulling the shared image instead of shadowing it
+    # with a locally-built one. Override the tag with METRICS_COLLECTOR_TAG in
+    # .env if a newer version is published.
+    image: ${REGISTRY:-intel}/hl-ai-metrics-collector:${METRICS_COLLECTOR_TAG:-2026.2.0-rc2}
     container_name: metrics-collector
     privileged: true
     pid: host

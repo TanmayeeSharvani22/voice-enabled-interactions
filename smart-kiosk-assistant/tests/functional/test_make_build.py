@@ -7,6 +7,14 @@ Covers test case #5:
   text-to-speech) that are pulled instead of built when edge-ai-libraries
   is not present locally.
 
+metrics-collector is pulled from a *different* image name
+(intel/hl-ai-metrics-collector) with its own independent tag
+(METRICS_COLLECTOR_TAG), because its source now lives in the edge-ai-suites
+repo shared with the multi-modal patient monitoring suite. It is not asserted
+here alongside the RELEASE_TAG-based images (`make build` only best-effort
+pulls it — see Makefile) — its health is instead validated functionally in
+test_full_stack.py.
+
 Prerequisites (handled by the CI workflow):
   - Docker daemon running
   - Internet access for docker pull (EAL images)
@@ -33,7 +41,6 @@ LOCAL_BUILT_IMAGES = [
     # Format: (repo_prefix, service_tag)  — full name: intel/<service>:<RELEASE_TAG>
     "rag-service",
     "kiosk-core",
-    "metrics-collector",
     "queue-service",
     "rtsp-streamer",
     "kiosk-ui",
@@ -44,7 +51,17 @@ EAL_PULLED_IMAGES = [
     "text-to-speech",
 ]
 
-ALL_EXPECTED_SERVICES = LOCAL_BUILT_IMAGES + EAL_PULLED_IMAGES
+# Declared in docker-compose.yml but pulled from a separate, independently
+# versioned image (intel/hl-ai-metrics-collector:METRICS_COLLECTOR_TAG) whose
+# source lives in the edge-ai-suites repo. Not part of the RELEASE_TAG image
+# matrix asserted by test_local_service_image_exists /
+# test_eal_service_image_exists — only checked for a compose declaration
+# below; its actual health is validated in test_full_stack.py.
+EXTERNALLY_SOURCED_IMAGES = [
+    "metrics-collector",
+]
+
+ALL_EXPECTED_SERVICES = LOCAL_BUILT_IMAGES + EAL_PULLED_IMAGES + EXTERNALLY_SOURCED_IMAGES
 
 REGISTRY_PREFIX = "intel"
 # Release tag matches Makefile default; CI sets RELEASE_TAG env var

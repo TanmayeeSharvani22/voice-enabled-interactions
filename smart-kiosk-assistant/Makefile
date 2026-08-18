@@ -62,8 +62,12 @@ _CAMERA_DEVICE_RAW     = $(strip $(CAMERA_DEVICE))
 _RTSP_CAMERA_DEVICE    = $(if $(_RTSP_LIVE_ON),$(_CAMERA_DEVICE_RAW),/dev/null)
 COMPOSE_BASE           = RTSP_SOURCE_MODE=$(_RTSP_SOURCE_MODE) RTSP_CAMERA_DEVICE=$(_RTSP_CAMERA_DEVICE) docker compose -f $(COMPOSE_FILE)
 
-# Services with fully local build contexts (built from source in this repo)
-LOCAL_ONLY_SERVICES := metrics-collector rag-service kiosk-core kiosk-ui rtsp-streamer queue-service
+# Services with fully local build contexts (built from source in this repo).
+# metrics-collector is NOT in this list: its source now lives in the
+# edge-ai-suites repo (multi_modal_patient_monitoring/services/metrics-
+# collector) and it is pulled as intel/hl-ai-metrics-collector, like the EAL
+# images below.
+LOCAL_ONLY_SERVICES := rag-service kiosk-core kiosk-ui rtsp-streamer queue-service
 
 # Identity feature (profile-gated). Driven by KIOSK_CORE_IDENTITY_ENABLED in
 # .env by default — set it to true there to build/start the identity-service
@@ -350,8 +354,10 @@ build: check-env ## Build (REGISTRY=false) or pull (REGISTRY=true) all images
 			REGISTRY=$(_DOCKER_REGISTRY) $(COMPOSE_BASE) $(_IDENTITY_PROFILE) build identity-service; \
 		fi; \
 	fi; \
-	echo "$(YELLOW)  Pulling audio-analyzer and text-to-speech from registry...$(NC)"; \
-	REGISTRY=$(_DOCKER_REGISTRY) $(COMPOSE_BASE) pull audio-analyzer text-to-speech
+	echo "$(YELLOW)  Pulling audio-analyzer, text-to-speech, and metrics-collector from registry...$(NC)"; \
+	REGISTRY=$(_DOCKER_REGISTRY) $(COMPOSE_BASE) pull audio-analyzer text-to-speech; \
+	REGISTRY=$(_DOCKER_REGISTRY) $(COMPOSE_BASE) pull metrics-collector || \
+		echo "$(YELLOW)  ⚠ Could not pull metrics-collector (intel/hl-ai-metrics-collector) from registry -- using locally cached image if present. Build it from edge-ai-suites/health-and-life-sciences-ai-suite/multi_modal_patient_monitoring/services/metrics-collector if missing.$(NC)"
 	@echo "$(GREEN)✓ Images ready$(NC)"
 
 # =============================================================================

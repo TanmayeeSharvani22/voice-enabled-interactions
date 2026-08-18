@@ -115,7 +115,14 @@ model:
   # collector `/metrics` (gpu_utilization) after this change; if OVMS latency
   # regresses, either move queue-service back to NPU or raise
   # `inference_interval` below to shed GPU cycles.
-  device: "NPU"
+  # Default is CPU: always available regardless of platform/driver state.
+  # NPU passthrough on this box currently fails at compile time
+  # ("Unrecognized device ID! 0x0x0" from vclAllocatedExecutableCreate3),
+  # so it is not a safe default. GPU is faster (see benchmarks above) once
+  # NPU/driver issues are resolved, but is shared with ovms-llm.
+  # Override without a rebuild via QUEUE_SERVICE__MODEL__DEVICE (see
+  # QUEUE_DEVICE in .env / docker-compose.yml).
+  device: "CPU"
   # Keep decoded frames in GPU (VA) memory through gvadetect/gvatrack/
   # gvawatermark instead of downloading them to system RAM for the CPU to
   # colour-convert. decodebin already autoplugs vah264dec, which produces VA

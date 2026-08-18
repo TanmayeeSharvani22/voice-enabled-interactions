@@ -75,10 +75,20 @@ class TestProjectStructure:
         assert (_KIOSK_ROOT / "configs").is_dir(), "configs/ directory not found"
 
     @pytest.mark.tier1
-    def test_metrics_collector_present(self):
-        """metrics-collector/ directory must exist (lives under kiosk_core/)."""
-        assert (_KIOSK_ROOT / "kiosk_core" / "metrics-collector").is_dir(), (
-            "kiosk_core/metrics-collector/ directory not found"
+    def test_metrics_collector_not_vendored_locally(self):
+        """kiosk_core/metrics-collector/ must NOT exist.
+
+        The metrics-collector source moved to the edge-ai-suites repo
+        (health-and-life-sciences-ai-suite/multi_modal_patient_monitoring/
+        services/metrics-collector), shared with the multi-modal patient
+        monitoring suite. kiosk-core now pulls the published
+        intel/hl-ai-metrics-collector image (see docker-compose.yml) instead
+        of vendoring/building the source locally.
+        """
+        assert not (_KIOSK_ROOT / "kiosk_core" / "metrics-collector").exists(), (
+            "kiosk_core/metrics-collector/ should have been removed — "
+            "metrics-collector is now pulled from the intel/hl-ai-metrics-collector "
+            "image built from the edge-ai-suites repo, not built locally."
         )
 
     @pytest.mark.tier1
