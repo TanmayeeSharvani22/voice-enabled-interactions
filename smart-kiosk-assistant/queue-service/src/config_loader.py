@@ -89,11 +89,21 @@ def _dict_to_namespace(value):
     return value
 
 
-def load_config(path=DEFAULT_CONFIG_PATH):
+def load_config_dict(path=DEFAULT_CONFIG_PATH):
+    """Load ``path`` and apply ``QUEUE_SERVICE__`` env overrides.
+
+    Returns the plain (dict-of-dicts) form rather than the ``SimpleNamespace``
+    used by :func:`load_config`, for callers that index the config with
+    ``[...]``/``.get(...)`` (e.g. ``pipeline.py``'s element-property builders)
+    instead of attribute access.
+    """
     path = _resolve_path(os.environ.get(CONFIG_PATH_ENV, path))
     data = _load_yaml_file(path)
-    data = _apply_env_overrides(data)
-    return _dict_to_namespace(data)
+    return _apply_env_overrides(data)
+
+
+def load_config(path=DEFAULT_CONFIG_PATH):
+    return _dict_to_namespace(load_config_dict(path))
 
 
 # Load once and expose.
