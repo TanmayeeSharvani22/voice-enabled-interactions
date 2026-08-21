@@ -89,20 +89,31 @@ def _dict_to_namespace(value):
     return value
 
 
-def load_config_dict(path=DEFAULT_CONFIG_PATH):
-    """Load ``path`` and apply ``QUEUE_SERVICE__`` env overrides.
+def load_config_dict(path=None):
+    """Load a queue-config YAML file and apply ``QUEUE_SERVICE__`` env overrides.
 
     Returns the plain (dict-of-dicts) form rather than the ``SimpleNamespace``
     used by :func:`load_config`, for callers that index the config with
     ``[...]``/``.get(...)`` (e.g. ``pipeline.py``'s element-property builders)
     instead of attribute access.
+
+    Path precedence (highest to lowest):
+      1. ``path`` — an explicit path supplied by the caller (e.g.
+         ``QueuePipeline(conf_dir=...)``) always wins; it is never
+         overridden by the environment.
+      2. ``QUEUE_SERVICE_CONFIG_PATH`` — used only when the caller relies on
+         the default path (``path`` omitted), so the env var can still
+         redirect the *default* config location.
+      3. ``DEFAULT_CONFIG_PATH`` — the built-in fallback.
     """
-    path = _resolve_path(os.environ.get(CONFIG_PATH_ENV, path))
+    if path is None:
+        path = os.environ.get(CONFIG_PATH_ENV, DEFAULT_CONFIG_PATH)
+    path = _resolve_path(path)
     data = _load_yaml_file(path)
     return _apply_env_overrides(data)
 
 
-def load_config(path=DEFAULT_CONFIG_PATH):
+def load_config(path=None):
     return _dict_to_namespace(load_config_dict(path))
 
 

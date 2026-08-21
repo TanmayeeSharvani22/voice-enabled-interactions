@@ -91,7 +91,13 @@ models:
   diarization: # Only applicable when models.asr.diarization is set to True
     provider: "huggingface"
     name: "pyannote/speaker-diarization-3.1"
-    device: CPU  # CPU or GPU
+    # CPU only in the currently deployed Kiosk image. This PyTorch/SpeechBrain
+    # component is loaded via torch.device(<value>); PyTorch has no "gpu"
+    # device string (Intel GPU needs "xpu", which this component does not
+    # use) and no "npu" string at all, so GPU/NPU fail at load time and
+    # diarization is disabled for the session (ASR keeps working). See
+    # docs/user-guide/get-started/configuration.md#audio-analyzer-diarization-device-configyaml.
+    device: CPU
     models_base_path: "models"
 
     # ── Clustering aggressiveness (single-mic kiosk tuning) ────────────────
