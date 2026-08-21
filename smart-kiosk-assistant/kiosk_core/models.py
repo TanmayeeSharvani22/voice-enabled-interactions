@@ -52,6 +52,16 @@ class FileSessionStartRequest(SessionStartRequest):
     realtime_factor: float = Field(default=1.0, gt=0.0, le=100.0)
 
 
+class TextQueryRequest(BaseModel):
+    """A typed question. Skips audio capture/ASR and runs straight through the
+    RAG/agent pipeline."""
+    text: str = Field(min_length=1)
+    language: str | None = config.DEFAULT_ASR_LANGUAGE
+    temperature: float = Field(default=0.0, ge=0.0, le=1.0)
+    history: list[dict[str, str]] = Field(default_factory=list)
+    conversation_id: str | None = None
+
+
 class WakeWordSessionStartRequest(SessionStartRequest):
     wakeword_model: str = Field(default=config.DEFAULT_WAKEWORD_MODEL)
     wakeword_threshold: float = Field(default=config.DEFAULT_WAKEWORD_THRESHOLD, ge=0.0, le=1.0)

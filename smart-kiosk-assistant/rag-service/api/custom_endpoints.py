@@ -260,13 +260,20 @@ def query_context(request: QueryRequest) -> StreamingResponse:
         top_k=request.top_k,
         history=history_pairs,
     )
+    # When grounding is required and nothing relevant was retrieved, reply with a
+    # fixed message instead of letting the LLM answer from general knowledge.
+    refuse = pipeline.refuse_without_context(sources, request.context_text)
 
     def _sse_generator():
         answer_tokens: list[str] = []
         try:
-            for token in pipeline.stream_from_prompt(prompt):
-                answer_tokens.append(token)
-                yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
+            if refuse:
+                answer_tokens.append(pipeline.NO_CONTEXT_REPLY)
+                yield f"data: {json.dumps({'token': pipeline.NO_CONTEXT_REPLY}, ensure_ascii=False)}\n\n"
+            else:
+                for token in pipeline.stream_from_prompt(prompt):
+                    answer_tokens.append(token)
+                    yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
         except Exception as exc:  # noqa: BLE001
             yield f"data: {json.dumps({'error': str(exc)}, ensure_ascii=False)}\n\n"
         finally:

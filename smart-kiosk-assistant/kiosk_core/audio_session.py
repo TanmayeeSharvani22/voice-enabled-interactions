@@ -1584,6 +1584,58 @@ class MicrophoneSession(BaseAudioSession):
             self._finalize_run(final_status, end_reason)
 
 
+class TextQuerySession(BaseAudioSession):
+    """A typed-question turn. Skips audio capture and ASR entirely, feeding the
+    text straight through the RAG/agent pipeline. Per the UI's text-input
+    design the answer is returned as text only (no speech is synthesized)."""
+
+    def __init__(
+        self,
+        request: SessionStartRequest,
+        query_text: str,
+        on_complete: Callable[[str], None] | None = None,
+    ):
+        super().__init__(request=request, on_complete=on_complete)
+        self._query_text = query_text
+        self._thread = threading.Thread(target=self._run, name=f"text-session-{self.session_id}", daemon=True)
+        self._source_kind = "text"
+
+    def start(self) -> None:
+        # No audio capture ??? the ASR flush worker is never needed; only the
+        # main thread (which drives RAG) runs.
+        with self._lock:
+            if self.status != "created":
+                raise ValueError("Session already started")
+            self.status = "running"
+            self.started_at = datetime.now(UTC)
+        self._thread.start()
+
+    def _run(self) -> None:
+        final_status = "completed"
+        end_reason = "text_query"
+        try:
+            with self._lock:
+                self._speech_started = True
+                self.transcript_parts.append(self._query_text)
+        except Exception as exc:  # noqa: BLE001
+            final_status = "failed"
+            end_reason = "error"
+            with self._lock:
+                self.error = str(exc)
+            logger.exception("Text session %s failed", self.session_id)
+        finally:
+            self._finalize_run(final_status, end_reason)
+
+    def _tts_worker(self, sentence_queue: Queue[tuple[int | None, str | None]]) -> None:
+        # Text queries are answered in text only. Drain the sentence queue
+        # without synthesizing so _stream_rag_response still accumulates the
+        # response text and completes normally.
+        while True:
+            sentence_index, sentence = sentence_queue.get()
+            if sentence_index is None or sentence is None:
+                return
+
+
 class FileAudioSession(BaseAudioSession):
     def __init__(
         self,

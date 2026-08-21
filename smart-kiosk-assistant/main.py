@@ -16,6 +16,7 @@ from kiosk_core.models import (
     FileSessionStartRequest,
     SessionStartRequest,
     SessionStopResponse,
+    TextQueryRequest,
     WakeWordSessionStartRequest,
 )
 from kiosk_core.pipeline_latency import pipeline_store
@@ -243,6 +244,22 @@ async def start_session(request: SessionStartRequest) -> dict[str, object]:
     await _clear_stale_cart_for_new_session(request.history)
     try:
         return service.start_session(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/query/text", response_model=None)
+async def query_text(request: TextQueryRequest) -> dict[str, object]:
+    """Answer a typed question through the RAG/agent pipeline (no audio)."""
+    await _clear_stale_cart_for_new_session(request.history)
+    session_request = SessionStartRequest(
+        language=request.language,
+        temperature=request.temperature,
+        history=request.history,
+        conversation_id=request.conversation_id,
+    )
+    try:
+        return await run_in_threadpool(service.start_text_session, session_request, request.text)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

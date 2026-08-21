@@ -116,7 +116,7 @@ answering:
     Use the retrieved context as the primary source of truth.
     Do not invent details that are not supported by the context.
     If the answer is not available in the context, say so plainly instead of guessing.
-  fallback_to_general_knowledge: true
+  fallback_to_general_knowledge: false
   include_source_markers: false
   # Number of prior user+assistant exchanges to carry as conversational
   # history (so the model can resolve follow-ups like "are you sure?").
