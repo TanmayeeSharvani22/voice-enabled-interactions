@@ -325,28 +325,17 @@ models**, loaded via `openvino.Core().compile_model(model, device)`, and
 `docker-compose.yml` to the OpenVINO compile call. The device-selection
 code itself has no bug and no model-format limitation.
 
-> [!IMPORTANT]
-> **Identity Service currently supports `CPU`/`GPU` in the Kiosk
-> deployment.** Although the face detection and re-identification models
-> use OpenVINO IR, `NPU` is currently unsupported because the
-> `identity-service` container does not have access to the NPU device:
-> `docker-compose.yml` only mounts `/dev/dri` (for `GPU`) for this service —
-> there is no `ACCEL_MOUNT_PATH`/`/dev/accel` mapping, unlike
-> `audio-analyzer` and `queue-service`. Setting `IDENTITY_DEVICE=NPU` is
-> currently accepted without validation/rejection, but OpenVINO would never
-> see an NPU device inside the container.
+> [!NOTE]
+> **Identity Service supports `CPU`, `GPU`, and `NPU`.** The
+> `identity-service` container now has NPU device passthrough via the same
+> `ACCEL_MOUNT_PATH`/`/dev/accel` mechanism used by `audio-analyzer` and
+> `queue-service`. Set `IDENTITY_DEVICE=NPU` in `.env` together with
+> `ACCEL_MOUNT_PATH` pointing to the host NPU device node (auto-detected by
+> `make up`) to run face/voice inference on the NPU.
 >
-> Additionally, the face/voice model files are **not downloaded by
-> default** — run `./setup_models.sh --identity` first. Without them, the
-> face/voice engines stay disabled (`inference_ready=false`) regardless of
-> the configured device, independent of the NPU passthrough gap above.
->
-> **Do not configure `IDENTITY_DEVICE=NPU` for the current deployment.**
-> Use `IDENTITY_DEVICE=CPU` or `IDENTITY_DEVICE=GPU` instead. Enabling NPU
-> in the future would require adding NPU device passthrough/configuration
-> to `docker-compose.yml` for this service and validating the complete
-> inference path, similar to the existing `audio-analyzer`/`queue-service`
-> `ACCEL_MOUNT_PATH` mechanism.
+> The face/voice model files are **not downloaded by default** — run
+> `./setup_models.sh --identity` first. Without them, the face/voice engines
+> stay disabled (`inference_ready=false`) regardless of the configured device.
 
 ## OVMS-LLM / RAG Service Device (`TARGET_DEVICE`)
 
@@ -356,28 +345,24 @@ own embedding/reranker components (`rag-service/config.yaml`'s
 `models.embedding.device` / `retrieval.reranker.device`, both driven from
 the same `.env` variable via `docker-compose.yml`).
 
-- **Currently supported:** `TARGET_DEVICE=CPU`, `TARGET_DEVICE=GPU`.
-- **Currently unsupported:** `TARGET_DEVICE=NPU`.
+- **Currently supported:** `TARGET_DEVICE=CPU`, `TARGET_DEVICE=GPU`, `TARGET_DEVICE=NPU`.
 
-> [!IMPORTANT]
-> **`TARGET_DEVICE=NPU` is currently unsupported for the OVMS deployment**
-> because the current `ovms-llm` container configuration does not expose
-> the NPU device (only `/dev/dri` is mapped; there is no `/dev/accel`
-> passthrough). OpenVINO inside the `ovms-llm` container does not detect an
-> NPU (`Available devices for Open VINO: CPU, GPU`). Setting
-> `TARGET_DEVICE=NPU` may cause OVMS startup/inference-compilation failure
-> and container restart loops.
+> [!NOTE]
+> **`TARGET_DEVICE=NPU` is now supported for the OVMS deployment.**
+> The `ovms-llm` container now has NPU device passthrough via the same
+> `ACCEL_MOUNT_PATH`/`/dev/accel` mechanism used by `audio-analyzer` and
+> `queue-service`. Set `TARGET_DEVICE=NPU` in `.env` together with
+> `ACCEL_MOUNT_PATH` pointing to the host NPU device node (auto-detected by
+> `make up`) to run the LLM on the NPU.
 >
-> **RAG service has a separate, independent NPU limitation.** When
-> `TARGET_DEVICE=NPU` is set, `rag-service` also attempts to initialize its
-> embedding/reranker components on NPU. The current RAG image does not
-> provide the required NPU compiler/runtime support
-> (`libopenvino_intel_npu_compiler.so` is missing), therefore NPU is
-> currently unsupported for the RAG service as well — independent of
-> whether `ovms-llm` itself is healthy.
+> **RAG service embedding/reranker on NPU** (`rag-service/config.yaml`'s
+> `models.embedding.device` / `retrieval.reranker.device`) also follow
+> `TARGET_DEVICE`. Verify NPU inference is available in the RAG image by
+> checking `rag-service` startup logs for
+> `Available devices for OpenVINO: CPU, GPU, NPU`.
 >
-> **Use `TARGET_DEVICE=CPU` or `TARGET_DEVICE=GPU`.** Do not configure
-> `TARGET_DEVICE=NPU` for the current OVMS/RAG deployment.
+> **Use `TARGET_DEVICE=CPU` or `TARGET_DEVICE=GPU`** if the host does not
+> have an NPU or `ACCEL_MOUNT_PATH` is not set.
 
 ## Environment Variables
 
