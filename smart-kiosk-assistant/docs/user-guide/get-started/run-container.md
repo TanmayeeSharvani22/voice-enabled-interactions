@@ -23,24 +23,13 @@ make check-env
 make up
 ```
 
-For NPU-accelerated services (`queue-service` via `QUEUE_DEVICE=NPU`,
-`identity-service` face/re-id via `IDENTITY_DEVICE=NPU`, `audio-analyzer`
-ASR via `models.asr.device=NPU`), this is the recommended path because the
-Makefile:
+For NPU-accelerated services (`queue-service`, `identity-service` face/re-id,
+`audio-analyzer` ASR — `whisper-tiny`/`whisper-base` only, see
+[ASR Support Matrix](./configuration.md#asr-support-matrix)), `make up` is
+recommended: it auto-detects the host NPU node and passes it through
+`ACCEL_MOUNT_PATH`.
 
-- detects the host NPU node under `/dev/accel/accel*`
-- validates that OpenVINO can see `NPU` inside the container
-- passes the detected host node through `ACCEL_MOUNT_PATH`
-
-> [!NOTE]
-> `audio-analyzer` ASR supports NPU **only for `whisper-tiny`/`whisper-base`**
-> — `whisper-small` and larger fail to compile. Use `CPU`/`GPU` for larger
-> models. See [ASR Support Matrix](./configuration.md#asr-support-matrix) and
-> [NPU Deployment Workflow](./configuration.md#npu-deployment-workflow).
-
-Direct Compose behavior is different: it does not run Makefile detection. If
-you intentionally run Compose directly with an NPU device configured for
-`queue-service` or `identity-service`, set `ACCEL_MOUNT_PATH` yourself:
+For direct `docker compose up` (no Makefile detection), set it yourself:
 
 ```bash
 ACCEL_MOUNT_PATH=/dev/accel/accel0 docker compose up -d queue-service
