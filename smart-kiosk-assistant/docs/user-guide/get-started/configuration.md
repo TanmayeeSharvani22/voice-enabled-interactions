@@ -496,22 +496,30 @@ This section provides a complete step-by-step workflow to run the Smart Kiosk As
 > (`QUEUE_DEVICE=NPU`) support NPU — see
 > [Queue Service Device](#queue-service-device-queue_device) above.
 > `audio-analyzer` diarization does **not** (see
-> [Audio Analyzer Diarization Device](#audio-analyzer-diarization-device-configyaml)),
-> `identity-service` does **not** currently (missing NPU device passthrough —
-> see [Identity Service Device](#identity-service-device-identity_device)),
-> `ovms-llm`/`rag-service` do **not** currently (missing NPU device
-> passthrough for `ovms-llm`, missing NPU compiler library for `rag-service`
-> — see [OVMS-LLM / RAG Service Device](#ovms-llm--rag-service-device-target_device)),
-> and `text-to-speech` does not support NPU at all. Do not set NPU on the
+> [Audio Analyzer Diarization Device](#audio-analyzer-diarization-device-configyaml)).
+> `identity-service` has NPU device passthrough and its face detection/
+> re-identification models compile and run on NPU; its voice model
+> (ECAPA-TDNN) does **not** — see
+> [Identity Service Device](#identity-service-device-identity_device).
+> `ovms-llm` has NPU device passthrough and its model compiles on NPU, but
+> live inference has been observed to fail at runtime — see
+> [OVMS-LLM Device](#ovms-llm-device-target_device) for the exact errors
+> observed; validate end-to-end before relying on it in production.
+> `rag-service`'s embedding/reranker models do **not** support NPU (dynamic
+> shapes rejected by the NPU compiler) and are configured independently of
+> `TARGET_DEVICE` — see
+> [RAG Service Embedding/Reranker Device](#rag-service-embeddingreranker-device-rag_embedding_device-rag_reranker_device).
+> `text-to-speech` does not support NPU at all. Do not set NPU on the
 > unsupported services/components — they will either fail to start or
 > silently disable the affected feature.
 >
 > | Component | CPU | GPU | NPU |
 > |---|---|---|---|
 > | Queue Service (`QUEUE_DEVICE`) | Yes | Yes | Yes |
-> | Identity Service (`IDENTITY_DEVICE`) | Yes | Yes | No — missing NPU device passthrough |
-> | OVMS-LLM (`TARGET_DEVICE`) | Yes | Yes | No — missing NPU device passthrough |
-> | RAG Service (`TARGET_DEVICE`) | Yes | Yes | No — missing NPU compiler library in image |
+> | Identity Service — face/re-id (`IDENTITY_DEVICE`) | Yes | Yes | Yes |
+> | Identity Service — voice/ECAPA-TDNN (`IDENTITY_DEVICE`) | Yes | Yes | No — dynamic STFT reshape rejected by NPU compiler |
+> | OVMS-LLM (`TARGET_DEVICE`) | Yes | Yes | Compiles, but runtime inference failures observed — validate before production use |
+> | RAG Service embedding/reranker (`RAG_EMBEDDING_DEVICE` / `RAG_RERANKER_DEVICE`) | Yes | Yes | No — dynamic shapes rejected by NPU compiler |
 > | Text-to-Speech (`models.tts.device`) | Yes | Yes | No |
 > | Audio Analyzer ASR (`models.asr.device`) | Yes | Yes | Yes (OpenVINO provider only — see [ASR Support Matrix](#asr-support-matrix)) |
 > | Audio Analyzer Diarization (`models.diarization.device`) | Yes | No — currently deployed configuration only supports CPU | No — currently deployed configuration only supports CPU |
