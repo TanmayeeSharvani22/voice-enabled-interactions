@@ -335,12 +335,17 @@ services:
       # of calling a tool). Tunable from .env without a rebuild.
       AGENT_MAX_TOKENS: ${AGENT_MAX_TOKENS:-192}
       # Embedding + reranker models are loaded in-process via OpenVINO at
-      # startup (config.yaml pins device: GPU for both). Override with
-      # TARGET_DEVICE=CPU (same variable used for the ovms-llm container) so
-      # environments without a GPU (e.g. CI runners) don't crash on startup
-      # with "[GPU] no supported devices found".
-      SMART_KIOSK_RAG__MODELS__EMBEDDING__DEVICE: ${TARGET_DEVICE:-GPU}
-      SMART_KIOSK_RAG__RETRIEVAL__RERANKER__DEVICE: ${TARGET_DEVICE:-GPU}
+      # startup. These are intentionally decoupled from TARGET_DEVICE (which
+      # only controls the ovms-llm container): both models are exported by
+      # optimum-intel with dynamic (unbounded) sequence-length shapes, which
+      # the NPU compiler rejects ("Missing upper bound for one or more
+      # nodes"). NPU is not a supported value here — use CPU or GPU. CPU is
+      # normally fast enough for embedding/reranking; GPU is the default to
+      # match prior behavior. Override independently via RAG_EMBEDDING_DEVICE
+      # / RAG_RERANKER_DEVICE so environments without a GPU (e.g. CI runners)
+      # don't crash on startup with "[GPU] no supported devices found".
+      SMART_KIOSK_RAG__MODELS__EMBEDDING__DEVICE: ${RAG_EMBEDDING_DEVICE:-GPU}
+      SMART_KIOSK_RAG__RETRIEVAL__RERANKER__DEVICE: ${RAG_RERANKER_DEVICE:-GPU}
       # Retrieval recall knobs. Defaults live in rag-service/config.yaml and
       # are calibrated against the QuickBite KB; override per-deployment when
       # the knowledge base changes materially, since the reranker's logit
