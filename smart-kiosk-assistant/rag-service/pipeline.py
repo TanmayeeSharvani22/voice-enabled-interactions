@@ -206,6 +206,20 @@ class RagPipeline:
 
     # ── answering ────────────────────────────────────────────────────
 
+    # Deterministic reply when grounding is required (fallback disabled) but no
+    # relevant context was retrieved — prevents the LLM from answering purely
+    # from its own general knowledge.
+    NO_CONTEXT_REPLY = (
+        "I'm sorry, I don't have information about that in the current knowledge base."
+    )
+
+    def refuse_without_context(
+        self, sources: list[RetrievalRecord], context_text: str | None
+    ) -> bool:
+        if getattr(self._prompt_builder, "fallback_to_general_knowledge", True):
+            return False
+        return not sources and not (context_text or "").strip()
+
     def answer_question(
         self,
         question: str,
@@ -216,10 +230,13 @@ class RagPipeline:
         system_prompt: str | None = None,
         history: list[tuple[str, str]] | None = None,
     ) -> dict:
-        prompt, sources = self.plan_answer(
+        sources = self.retrieve(question, top_k=top_k)
+        if self.refuse_without_context(sources, context_text):
+            return {"answer": self.NO_CONTEXT_REPLY, "sources": []}
+        prompt = self._prompt_builder.build(
             question,
+            sources,
             context_text=context_text,
-            top_k=top_k,
             system_prompt=system_prompt,
             history=history,
         )
@@ -239,10 +256,14 @@ class RagPipeline:
         system_prompt: str | None = None,
         history: list[tuple[str, str]] | None = None,
     ) -> Generator[str, None, None]:
-        prompt, _ = self.plan_answer(
+        sources = self.retrieve(question, top_k=top_k)
+        if self.refuse_without_context(sources, context_text):
+            yield self.NO_CONTEXT_REPLY
+            return
+        prompt = self._prompt_builder.build(
             question,
+            sources,
             context_text=context_text,
-            top_k=top_k,
             system_prompt=system_prompt,
             history=history,
         )

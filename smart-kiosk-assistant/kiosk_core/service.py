@@ -6,7 +6,7 @@ from uuid import uuid4
 import sounddevice as sd
 from fastapi import UploadFile
 
-from kiosk_core.audio_session import BrowserStreamSession, FileAudioSession, MicrophoneSession
+from kiosk_core.audio_session import BrowserStreamSession, FileAudioSession, MicrophoneSession, TextQuerySession
 from kiosk_core.models import (
     BrowserWakeWordStartRequest,
     BrowserWakeWordChunkResponse,
@@ -65,6 +65,16 @@ class SessionService:
             "elapsed_seconds": detection.elapsed_seconds,
         }
         return snapshot
+
+    def start_text_session(self, request: SessionStartRequest, text: str) -> dict[str, object]:
+        """Answer a typed question. Runs alongside any audio session without
+        the single-active-session gate, since text turns are transient and
+        never touch the microphone."""
+        session = TextQuerySession(request=request, query_text=text, on_complete=self._on_session_complete)
+        with self._lock:
+            self._sessions[session.session_id] = session
+        session.start()
+        return session.snapshot()
 
     def start_file_session(self, request: FileSessionStartRequest, upload: UploadFile) -> dict[str, object]:
         suffix = Path(upload.filename or "audio.wav").suffix or ".wav"
