@@ -24,17 +24,18 @@ make up
 ```
 
 For NPU-accelerated services (`queue-service` via `QUEUE_DEVICE=NPU`,
-`identity-service` face/re-id via `IDENTITY_DEVICE=NPU`), this is the
-recommended path because the Makefile:
+`identity-service` face/re-id via `IDENTITY_DEVICE=NPU`, `audio-analyzer`
+ASR via `models.asr.device=NPU`), this is the recommended path because the
+Makefile:
 
 - detects the host NPU node under `/dev/accel/accel*`
 - validates that OpenVINO can see `NPU` inside the container
 - passes the detected host node through `ACCEL_MOUNT_PATH`
 
 > [!NOTE]
-> `audio-analyzer` ASR does **not** support NPU — `models.asr.device=NPU`
-> fails to compile for any provider. Use `CPU` or `GPU` for ASR. See
-> [ASR Support Matrix](./configuration.md#asr-support-matrix) and
+> `audio-analyzer` ASR supports NPU **only for `whisper-tiny`/`whisper-base`**
+> — `whisper-small` and larger fail to compile. Use `CPU`/`GPU` for larger
+> models. See [ASR Support Matrix](./configuration.md#asr-support-matrix) and
 > [NPU Deployment Workflow](./configuration.md#npu-deployment-workflow).
 
 Direct Compose behavior is different: it does not run Makefile detection. If

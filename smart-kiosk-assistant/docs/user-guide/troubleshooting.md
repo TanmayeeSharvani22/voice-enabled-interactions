@@ -51,9 +51,9 @@ The device field lives in the per-service pinned config (see
 does not appear in the logs:
 
 - Check the value is supported for that model (e.g. `audio-analyzer`
-  ASR supports `CPU` for `provider: openai`, and `CPU|GPU` for
-  `provider: openvino` — `NPU` is not currently supported for ASR, see
-  [ASR Support Matrix](./get-started/configuration.md#asr-support-matrix)).
+  ASR supports `CPU` for `provider: openai`, and `CPU|GPU|NPU` for
+  `provider: openvino` — `NPU` only works with `whisper-tiny`/`whisper-base`,
+  see [ASR Support Matrix](./get-started/configuration.md#asr-support-matrix)).
 - For `GPU`: confirm `/dev/dri` exists and the Intel OpenVINO GPU
   runtime is installed.
 - Restart the affected service after the change:
@@ -86,16 +86,17 @@ ASR provider/device. The ASR selection is read only from
 `configs/audio-analyzer/config.yaml`.
 
 > [!IMPORTANT]
-> `audio-analyzer` ASR does **not** support `device: NPU` for any
-> provider — it fails to compile on NPU. Do not set
-> `models.asr.device: NPU`. See
+> `audio-analyzer` ASR supports `device: NPU` only for
+> `models.asr.name: whisper-tiny` or `whisper-base`; `whisper-small` and
+> larger fail to compile on NPU. See
 > [ASR Support Matrix](./get-started/configuration.md#asr-support-matrix)
 > for the exact error and root cause. The `ACCEL_MOUNT_PATH` / NPU
-> device-mapping guidance below applies to `queue-service` and
-> `identity-service` (face/re-id), which do run on NPU — not to
-> `audio-analyzer`.
+> device-mapping guidance below applies to `queue-service`,
+> `identity-service` (face/re-id), and `audio-analyzer` ASR
+> (`whisper-tiny`/`whisper-base` only).
 
-For NPU-capable services (`queue-service`, `identity-service` face/re-id),
+For NPU-capable services (`queue-service`, `identity-service` face/re-id,
+`audio-analyzer` ASR with `whisper-tiny`/`whisper-base`),
 `docker-compose.yml` uses `ACCEL_MOUNT_PATH` to map the host NPU device
 node into `/dev/accel/accel0` inside the container. The checked-in Compose
 file defaults that mapping to `/dev/null` so CPU/GPU-only hosts stay safe.
@@ -109,8 +110,8 @@ Operational distinction:
   OpenVINO NPU visibility, and passes the detected node through
   `ACCEL_MOUNT_PATH`.
 - `docker compose up` does not run that Makefile detection logic; when
-  `QUEUE_DEVICE=NPU` or `IDENTITY_DEVICE=NPU` is configured, provide
-  `ACCEL_MOUNT_PATH` explicitly.
+  `QUEUE_DEVICE=NPU`, `IDENTITY_DEVICE=NPU`, or `models.asr.device=NPU` is
+  configured, provide `ACCEL_MOUNT_PATH` explicitly.
 
 These services do not need `privileged: true` for this path; explicit
 `/dev/dri` plus the NPU device mapping and Level Zero runtime libraries are
@@ -129,7 +130,10 @@ availability:
 - `openai + GPU/NPU` rejected (audio-analyzer)
 - `openvino + CPU` allowed (audio-analyzer)
 - `openvino + GPU` requires Intel GPU detection (audio-analyzer)
-- `openvino + NPU` is rejected for `audio-analyzer` — ASR does not support NPU
+- `openvino + NPU` for `audio-analyzer` passes device-visibility checks for
+  any model, but only actually compiles/loads for `whisper-tiny`/`whisper-base`
+  — `make check-env` does not distinguish by model name, so a `whisper-small`+
+  NPU configuration will pass `check-env` but crash-loop at container startup
 - `QUEUE_DEVICE=NPU` / `IDENTITY_DEVICE=NPU` require Intel NPU detection and
   successful container visibility of the mapped device
 
@@ -161,21 +165,24 @@ ACCEL_MOUNT_PATH=/dev/accel/accel0 docker compose up -d queue-service
 `/dev/accel/accel0` is a common path, but the host node may differ by
 platform. Use the node discovered on your host.
 
-### `models.asr.device=NPU` Fails to Compile for `audio-analyzer`
+### `models.asr.device=NPU` Fails to Compile for `audio-analyzer` (model-size dependent)
 
-`audio-analyzer` ASR does not support NPU for either the `openai` or
-`openvino` provider:
+`audio-analyzer` ASR NPU support depends on the model:
 
 - Unsupported: `provider: openai` + `device: GPU`
 - Unsupported: `provider: openai` + `device: NPU`
-- **Unsupported: `provider: openvino` + `device: NPU`** — fails at model
-  compile time with `Missing upper bound for one or more nodes` (see
+- **Supported: `provider: openvino` + `device: NPU` + `name: whisper-tiny` or `whisper-base`**
+  — confirmed working with a real transcription request.
+- **Unsupported: `provider: openvino` + `device: NPU` + `name: whisper-small`**
+  (or larger) — fails at model compile time with
+  `Check '!self_attn_nodes.empty()' failed` (see
   [ASR Support Matrix](./get-started/configuration.md#asr-support-matrix))
-- Supported: `provider: openvino` + `device: GPU`
-- Supported: `provider: openai` or `provider: openvino` + `device: CPU`
+- Supported: `provider: openvino` + `device: GPU` (any model size)
+- Supported: `provider: openai` or `provider: openvino` + `device: CPU` (any model size)
 
 If you hit startup/model-load errors with `openai + GPU/NPU` or
-`openvino + NPU`, switch to `openvino + GPU` (or `+ CPU`) and recreate
+`openvino + NPU` with `whisper-small`+, switch to `whisper-tiny`/`whisper-base`
+on NPU, or to `openvino + GPU`/`+ CPU` with any model size, and recreate
 `audio-analyzer`:
 
 ```bash
