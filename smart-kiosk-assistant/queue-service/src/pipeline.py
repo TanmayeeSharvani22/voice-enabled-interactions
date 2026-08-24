@@ -23,6 +23,8 @@ from urllib.parse import urlparse
 import gi
 import yaml
 
+from config_loader import load_config_dict
+
 gi.require_version("Gst", "1.0")
 gi.require_version("GstVideo", "1.0")
 from gi.repository import GLib, Gst, GstVideo  # noqa: E402  (must follow require_version)
@@ -133,13 +135,17 @@ _SOURCE_ELEMENT_NAME = "queue_source"
 class QueuePipeline:
     """Builds and runs the DLStreamer queue-service pipeline.
 
-    Configuration is read directly from the YAML files under ``conf/``
-    because the shared ``config_loader`` is not implemented yet.
+    ``queue-config.yaml`` is loaded through the shared ``config_loader``
+    module so ``QUEUE_SERVICE__*`` environment overrides (e.g.
+    ``QUEUE_SERVICE__MODEL__DEVICE``, wired from ``QUEUE_DEVICE`` in
+    ``docker-compose.yml``/``.env``) reach the actual pipeline element
+    properties. ``pipeline.yaml`` (the element graph shape) has no
+    overridable settings and is loaded as plain YAML.
     """
 
     def __init__(self, conf_dir: Path | str | None = None) -> None:
         self._conf_dir = Path(conf_dir) if conf_dir else CONF_DIR
-        self._config = self._load_yaml(self._conf_dir / "queue-config.yaml")
+        self._config = load_config_dict(str(self._conf_dir / "queue-config.yaml"))
         self._pipeline_def = self._load_yaml(self._conf_dir / "pipeline.yaml")
 
         source_cfg = self._config.get("source", {})

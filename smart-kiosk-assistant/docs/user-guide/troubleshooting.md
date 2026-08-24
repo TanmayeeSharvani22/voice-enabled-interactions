@@ -166,6 +166,42 @@ docker logs audio-analyzer
 curl http://localhost:8010/health
 ```
 
+### `TARGET_DEVICE=NPU` Causes OVMS/RAG to Restart-Loop
+
+If `TARGET_DEVICE=NPU` is configured for the current OVMS/RAG deployment,
+`ovms-llm` and `rag-service` may fail during startup because NPU is not
+currently supported in the deployed configuration. This can result in
+unhealthy containers or restart loops:
+
+- `ovms-llm`: the container only has `/dev/dri` mapped (no `/dev/accel`
+  passthrough), so OpenVINO inside the container does not detect an NPU
+  (`Available devices for Open VINO: CPU, GPU`). Forcing `TARGET_DEVICE=NPU`
+  causes an OpenVINO compilation failure and the container restarts
+  repeatedly under `restart: unless-stopped`.
+- `rag-service`: fails independently, for a different reason — its
+  embedding/reranker components also pick up `TARGET_DEVICE=NPU` and the
+  current RAG image does not provide the required NPU compiler/runtime
+  library (`libopenvino_intel_npu_compiler.so`), causing the service's
+  startup to fail and restart-loop even if `ovms-llm` were healthy.
+
+Set `TARGET_DEVICE=CPU` or `TARGET_DEVICE=GPU` in `.env` and recreate both
+services:
+
+```bash
+docker compose up -d --force-recreate ovms-llm rag-service
+docker inspect ovms-llm rag-service --format '{{.Name}}: {{.State.Status}} RestartCount={{.RestartCount}}'
+```
+
+### `IDENTITY_DEVICE=NPU` Is Not Supported
+
+`IDENTITY_DEVICE=NPU` is currently unsupported because the
+`identity-service` container does not expose the NPU device
+(`docker-compose.yml` only maps `/dev/dri` for this service, not
+`/dev/accel`). Setting `IDENTITY_DEVICE=NPU` will not cause a crash, but
+OpenVINO will never see an NPU device inside the container. Use
+`IDENTITY_DEVICE=CPU` or `IDENTITY_DEVICE=GPU` instead — see
+[Identity Service Device](./get-started/configuration.md#identity-service-device-identity_device).
+
 ## Permission Errors on Mounted Folders
 
 Every container runs as UID/GID `1000:1000` (baked into each image).

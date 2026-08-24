@@ -71,8 +71,15 @@ Each model-hosting service reads its device from a pinned config file:
 The supported devices for each model are listed in the
 [Supported / validated models](#supported--validated-models) table above.
 
-Use uppercase device names (`CPU`, `GPU`, `NPU`). `rag-service` expects
-them as quoted strings; `audio-analyzer` and `text-to-speech` unquoted.
+Use uppercase device names (`CPU`, `GPU`, and — for `audio-analyzer` ASR and
+`queue-service` only — `NPU`). `rag-service` expects them as quoted strings;
+`audio-analyzer` and `text-to-speech` unquoted.
+
+> [!IMPORTANT]
+> **`text-to-speech` does not support `NPU`.** `models.tts.device` only
+> accepts `CPU`/`GPU` (see `configs/text-to-speech/config.yaml`); there is no
+> NPU device mapping for this service in `docker-compose.yml`. Do not set
+> `models.tts.device: NPU` — it is not a supported configuration.
 
 After editing, restart the affected service and confirm OpenVINO picked
 the device:
@@ -248,6 +255,130 @@ If `GPU` or `NPU` is configured and unavailable on the host,
 `make check-env` fails before any container startup. The stack does not
 silently fall back to another device.
 
+## Audio Analyzer Diarization Device (`config.yaml`)
+
+Diarization (`models.diarization.device`) is a **separate component from ASR**
+(see [ASR Support Matrix](#asr-support-matrix) above) with its own,
+more limited device support. Do not assume ASR's `CPU`/`GPU`/`NPU` support
+applies to diarization — it does not.
+
+> [!IMPORTANT]
+> **In the currently released Kiosk image, diarization only supports `CPU`.**
+> The diarizer (`pyannote/speaker-diarization-3.1`, a PyTorch/SpeechBrain
+> model) is loaded with `torch.device(<configured value>)`. PyTorch has no
+> `"gpu"` device string (Intel GPU support in PyTorch requires `"xpu"`, which
+> this component does not use) and no `"npu"` device string at all. Setting
+> `device: GPU` or `device: NPU` is **accepted by the config schema** but
+> fails at diarizer-load time with an error like:
+> ```
+> Expected one of cpu, cuda, ipu, xpu, ... device type at start of device string: gpu
+> ```
+> This is **non-fatal**: the failure is caught, logged as a warning, and
+> diarization is disabled for that session — the container stays healthy and
+> ASR keeps working, but speaker labels are not produced.
+>
+> **Use `device: CPU` for diarization.** Do not configure `GPU` or `NPU` for
+> `models.diarization.device` — they do not work in this image and will
+> silently disable diarization rather than accelerate it.
+
+An OpenVINO-backed diarization path that genuinely supports `GPU`/`NPU`
+exists in a newer upstream `edge-ai-libraries` `audio-analyzer` checkout,
+but **is not part of the currently released Kiosk image** covered by this
+document. Do not configure `GPU`/`NPU` for diarization based on that
+upstream code until a Kiosk image that includes it is released.
+
+## Queue Service Device (`QUEUE_DEVICE`)
+
+`queue-service` runs the YOLO26 person detector through a DLStreamer
+(`gvainference`) pipeline. The inference device is controlled by
+`model.device` in `queue-service/conf/queue-config.yaml`, and can be
+overridden without editing that file via `QUEUE_DEVICE` in `.env`
+(mapped by `docker-compose.yml` to `QUEUE_SERVICE__MODEL__DEVICE`, read by
+`queue-service/src/config_loader.py`).
+
+- Default: `QUEUE_DEVICE=CPU` — always available, no extra device mapping
+  needed.
+- `QUEUE_DEVICE=GPU` / `QUEUE_DEVICE=NPU` — supported, using the same
+  `/dev/dri` and `ACCEL_MOUNT_PATH`-driven `/dev/accel` mapping described
+  under [Audio Analyzer ASR Provider/Device](#audio-analyzer-asr-providerdevice-configyaml)
+  above. For NPU, set `ACCEL_MOUNT_PATH` to the host NPU device node
+  (auto-detected by `make up`) before starting `queue-service`.
+
+Verify the configured device actually reached the pipeline:
+
+```bash
+docker logs queue-service 2>&1 | grep "gvainference model"
+# Expected: ... gvainference model=... device=NPU ...  (or CPU/GPU, matching QUEUE_DEVICE)
+```
+
+> Editing `queue-config.yaml`'s `model.device` directly also works and takes
+> precedence in the same way as any other YAML default — `QUEUE_DEVICE` only
+> needs to be set when you want to override it without touching the file.
+
+## Identity Service Device (`IDENTITY_DEVICE`)
+
+`identity-service` performs face detection/re-identification
+(`face-detection-retail-0005`, `face-reidentification-retail-0095`) and
+voice-print embedding (`ecapa-tdnn-voice`) — all three are **OpenVINO IR
+models**, loaded via `openvino.Core().compile_model(model, device)`, and
+`IDENTITY_DEVICE` is correctly wired end-to-end from `.env` through
+`docker-compose.yml` to the OpenVINO compile call. The device-selection
+code itself has no bug and no model-format limitation.
+
+> [!IMPORTANT]
+> **Identity Service currently supports `CPU`/`GPU` in the Kiosk
+> deployment.** Although the face detection and re-identification models
+> use OpenVINO IR, `NPU` is currently unsupported because the
+> `identity-service` container does not have access to the NPU device:
+> `docker-compose.yml` only mounts `/dev/dri` (for `GPU`) for this service —
+> there is no `ACCEL_MOUNT_PATH`/`/dev/accel` mapping, unlike
+> `audio-analyzer` and `queue-service`. Setting `IDENTITY_DEVICE=NPU` is
+> currently accepted without validation/rejection, but OpenVINO would never
+> see an NPU device inside the container.
+>
+> Additionally, the face/voice model files are **not downloaded by
+> default** — run `./setup_models.sh --identity` first. Without them, the
+> face/voice engines stay disabled (`inference_ready=false`) regardless of
+> the configured device, independent of the NPU passthrough gap above.
+>
+> **Do not configure `IDENTITY_DEVICE=NPU` for the current deployment.**
+> Use `IDENTITY_DEVICE=CPU` or `IDENTITY_DEVICE=GPU` instead. Enabling NPU
+> in the future would require adding NPU device passthrough/configuration
+> to `docker-compose.yml` for this service and validating the complete
+> inference path, similar to the existing `audio-analyzer`/`queue-service`
+> `ACCEL_MOUNT_PATH` mechanism.
+
+## OVMS-LLM / RAG Service Device (`TARGET_DEVICE`)
+
+`TARGET_DEVICE` controls the inference device for both `ovms-llm` (the LLM
+served by OpenVINO Model Server for the ordering agent) and `rag-service`'s
+own embedding/reranker components (`rag-service/config.yaml`'s
+`models.embedding.device` / `retrieval.reranker.device`, both driven from
+the same `.env` variable via `docker-compose.yml`).
+
+- **Currently supported:** `TARGET_DEVICE=CPU`, `TARGET_DEVICE=GPU`.
+- **Currently unsupported:** `TARGET_DEVICE=NPU`.
+
+> [!IMPORTANT]
+> **`TARGET_DEVICE=NPU` is currently unsupported for the OVMS deployment**
+> because the current `ovms-llm` container configuration does not expose
+> the NPU device (only `/dev/dri` is mapped; there is no `/dev/accel`
+> passthrough). OpenVINO inside the `ovms-llm` container does not detect an
+> NPU (`Available devices for Open VINO: CPU, GPU`). Setting
+> `TARGET_DEVICE=NPU` may cause OVMS startup/inference-compilation failure
+> and container restart loops.
+>
+> **RAG service has a separate, independent NPU limitation.** When
+> `TARGET_DEVICE=NPU` is set, `rag-service` also attempts to initialize its
+> embedding/reranker components on NPU. The current RAG image does not
+> provide the required NPU compiler/runtime support
+> (`libopenvino_intel_npu_compiler.so` is missing), therefore NPU is
+> currently unsupported for the RAG service as well — independent of
+> whether `ovms-llm` itself is healthy.
+>
+> **Use `TARGET_DEVICE=CPU` or `TARGET_DEVICE=GPU`.** Do not configure
+> `TARGET_DEVICE=NPU` for the current OVMS/RAG deployment.
+
 ## Environment Variables
 
 kiosk-core has no config file. All settings are controlled through environment variables.
@@ -322,7 +453,29 @@ Session parameters (chunk duration, silence threshold, etc.) can also be provide
 This section provides a complete step-by-step workflow to run the Smart Kiosk Assistant with Intel NPU acceleration for Whisper ASR.
 
 > **Which services support NPU?**
-> Only `audio-analyzer` supports NPU (`provider: openvino, device: NPU`). All other services use CPU (kiosk-core, rag-service, text-to-speech) or GPU (ovms-llm). Do not set NPU on other services — they will fail to start.
+> `audio-analyzer` ASR (`provider: openvino, device: NPU`) and `queue-service`
+> (`QUEUE_DEVICE=NPU`) support NPU — see
+> [Queue Service Device](#queue-service-device-queue_device) above.
+> `audio-analyzer` diarization does **not** (see
+> [Audio Analyzer Diarization Device](#audio-analyzer-diarization-device-configyaml)),
+> `identity-service` does **not** currently (missing NPU device passthrough —
+> see [Identity Service Device](#identity-service-device-identity_device)),
+> `ovms-llm`/`rag-service` do **not** currently (missing NPU device
+> passthrough for `ovms-llm`, missing NPU compiler library for `rag-service`
+> — see [OVMS-LLM / RAG Service Device](#ovms-llm--rag-service-device-target_device)),
+> and `text-to-speech` does not support NPU at all. Do not set NPU on the
+> unsupported services/components — they will either fail to start or
+> silently disable the affected feature.
+>
+> | Component | CPU | GPU | NPU |
+> |---|---|---|---|
+> | Queue Service (`QUEUE_DEVICE`) | Yes | Yes | Yes |
+> | Identity Service (`IDENTITY_DEVICE`) | Yes | Yes | No — missing NPU device passthrough |
+> | OVMS-LLM (`TARGET_DEVICE`) | Yes | Yes | No — missing NPU device passthrough |
+> | RAG Service (`TARGET_DEVICE`) | Yes | Yes | No — missing NPU compiler library in image |
+> | Text-to-Speech (`models.tts.device`) | Yes | Yes | No |
+> | Audio Analyzer ASR (`models.asr.device`) | Yes | Yes | Yes (OpenVINO provider only — see [ASR Support Matrix](#asr-support-matrix)) |
+> | Audio Analyzer Diarization (`models.diarization.device`) | Yes | No — currently deployed configuration only supports CPU | No — currently deployed configuration only supports CPU |
 
 ### 1 — System requirements
 
