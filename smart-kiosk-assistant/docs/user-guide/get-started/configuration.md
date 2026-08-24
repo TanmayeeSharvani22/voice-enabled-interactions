@@ -325,59 +325,98 @@ models**, loaded via `openvino.Core().compile_model(model, device)`, and
 `docker-compose.yml` to the OpenVINO compile call. The device-selection
 code itself has no bug and no model-format limitation.
 
+> [!NOTE]
+> **Face detection/re-identification support `CPU`, `GPU`, and `NPU`.**
+> The `identity-service` container has NPU device passthrough via the same
+> `ACCEL_MOUNT_PATH`/`/dev/accel` mechanism used by `audio-analyzer` and
+> `queue-service`. Set `IDENTITY_DEVICE=NPU` in `.env` together with
+> `ACCEL_MOUNT_PATH` pointing to the host NPU device node (auto-detected by
+> `make up`) to run face detection/re-identification on the NPU.
+>
+> **Voice-print embedding (`ecapa-tdnn-voice`) does not support `NPU`.**
+> Its OpenVINO IR contains an internal STFT reshape with an unbounded
+> dynamic dimension (`aten::view/Reshape`), which the NPU compiler rejects
+> at compile time (`Got negative shape dim bound`). With
+> `IDENTITY_DEVICE=NPU`, the service starts with face engine enabled and
+> voice engine disabled (`inference_ready=false`, since voice verification
+> requires both). Use `IDENTITY_DEVICE=CPU` or `IDENTITY_DEVICE=GPU` if
+> voice authentication is required.
+>
+> The face/voice model files are **not downloaded by default** — run
+> `./setup_models.sh --identity` first. Without them, the face/voice engines
+> stay disabled (`inference_ready=false`) regardless of the configured device.
+
+## OVMS-LLM Device (`TARGET_DEVICE`)
+
+`TARGET_DEVICE` controls the inference device for the `ovms-llm` container
+only (the LLM served by OpenVINO Model Server for the ordering agent).
+`rag-service`'s own embedding/reranker components have their own,
+independent device configuration — see
+[RAG Service Embedding/Reranker Device](#rag-service-embeddingreranker-device-rag_embedding_device-rag_reranker_device)
+below.
+
+- **Currently supported:** `TARGET_DEVICE=CPU`, `TARGET_DEVICE=GPU`, `TARGET_DEVICE=NPU`.
+
+> [!NOTE]
+> **`TARGET_DEVICE=NPU` device passthrough works for `ovms-llm`.**
+> The `ovms-llm` container has NPU device passthrough via the same
+> `ACCEL_MOUNT_PATH`/`/dev/accel` mechanism used by `audio-analyzer` and
+> `queue-service`. Set `TARGET_DEVICE=NPU` in `.env` together with
+> `ACCEL_MOUNT_PATH` pointing to the host NPU device node (auto-detected by
+> `make up`) to compile the LLM for the NPU. OVMS logs
+> `Available devices for Open VINO: CPU, GPU, NPU` and the model
+> (`Qwen3-4B-int8-ov`) compiles successfully.
+>
+> **NPU inference has been observed to fail at request time** on at least
+> one validated host, even after a successful compile — with two distinct
+> symptoms seen: a short chat-completion request failed with
+> `zeFenceHostSynchronize result: ZE_RESULT_ERROR_UNKNOWN` inside OVMS's
+> LLM executor, and a longer RAG-augmented prompt (routed through
+> `rag-service`) failed with `Input length exceeds the maximum allowed
+> length`. Both point to NPU driver/runtime or static-shape/context-length
+> limitations for this model's KV-cache/stateful execution graph, not a
+> configuration issue. Validate end-to-end generation with realistic
+> prompt lengths (not just `/v3/models` or container health) before
+> relying on `TARGET_DEVICE=NPU` for `ovms-llm` in production.
+>
+> **Use `TARGET_DEVICE=CPU` or `TARGET_DEVICE=GPU`** if the host does not
+> have an NPU, `ACCEL_MOUNT_PATH` is not set, or NPU generation requests
+> fail as described above.
+
+## RAG Service Embedding/Reranker Device (`RAG_EMBEDDING_DEVICE`, `RAG_RERANKER_DEVICE`)
+
+`rag-service`'s embedding (`BAAI/bge-large-en-v1.5`) and reranker
+(`BAAI/bge-reranker-base`) components are OpenVINO IR models exported
+in-process by `optimum-intel` (`rag-service/utils/ensure_model.py`) and
+loaded via `OVModelForFeatureExtraction`/equivalent
+(`rag-service/components/embedding_component.py`,
+`reranker_component.py`). Their device is set independently of
+`TARGET_DEVICE` via `RAG_EMBEDDING_DEVICE` / `RAG_RERANKER_DEVICE` in
+`.env` (mapped by `docker-compose.yml` to
+`SMART_KIOSK_RAG__MODELS__EMBEDDING__DEVICE` /
+`SMART_KIOSK_RAG__RETRIEVAL__RERANKER__DEVICE`).
+
+- **Currently supported:** `RAG_EMBEDDING_DEVICE`/`RAG_RERANKER_DEVICE` =
+  `CPU` or `GPU`. Default: `GPU`.
+- **Currently unsupported:** `NPU`.
+
 > [!IMPORTANT]
-> **Identity Service currently supports `CPU`/`GPU` in the Kiosk
-> deployment.** Although the face detection and re-identification models
-> use OpenVINO IR, `NPU` is currently unsupported because the
-> `identity-service` container does not have access to the NPU device:
-> `docker-compose.yml` only mounts `/dev/dri` (for `GPU`) for this service —
-> there is no `ACCEL_MOUNT_PATH`/`/dev/accel` mapping, unlike
-> `audio-analyzer` and `queue-service`. Setting `IDENTITY_DEVICE=NPU` is
-> currently accepted without validation/rejection, but OpenVINO would never
-> see an NPU device inside the container.
+> **`NPU` is not supported for the embedding/reranker models.**
+> `optimum-intel`'s default export produces OpenVINO IR with dynamic
+> (unbounded) sequence-length and batch shapes — required because queries
+> and knowledge-base documents vary in length and the reranker batches
+> multiple candidates per call (`rag-service/config.yaml`'s
+> `models.embedding.batch_size`). The NPU compiler rejects this IR
+> (`Missing upper bound for one or more nodes`); setting either variable to
+> `NPU` will crash `rag-service` at startup.
 >
-> Additionally, the face/voice model files are **not downloaded by
-> default** — run `./setup_models.sh --identity` first. Without them, the
-> face/voice engines stay disabled (`inference_ready=false`) regardless of
-> the configured device, independent of the NPU passthrough gap above.
->
-> **Do not configure `IDENTITY_DEVICE=NPU` for the current deployment.**
-> Use `IDENTITY_DEVICE=CPU` or `IDENTITY_DEVICE=GPU` instead. Enabling NPU
-> in the future would require adding NPU device passthrough/configuration
-> to `docker-compose.yml` for this service and validating the complete
-> inference path, similar to the existing `audio-analyzer`/`queue-service`
-> `ACCEL_MOUNT_PATH` mechanism.
-
-## OVMS-LLM / RAG Service Device (`TARGET_DEVICE`)
-
-`TARGET_DEVICE` controls the inference device for both `ovms-llm` (the LLM
-served by OpenVINO Model Server for the ordering agent) and `rag-service`'s
-own embedding/reranker components (`rag-service/config.yaml`'s
-`models.embedding.device` / `retrieval.reranker.device`, both driven from
-the same `.env` variable via `docker-compose.yml`).
-
-- **Currently supported:** `TARGET_DEVICE=CPU`, `TARGET_DEVICE=GPU`.
-- **Currently unsupported:** `TARGET_DEVICE=NPU`.
-
-> [!IMPORTANT]
-> **`TARGET_DEVICE=NPU` is currently unsupported for the OVMS deployment**
-> because the current `ovms-llm` container configuration does not expose
-> the NPU device (only `/dev/dri` is mapped; there is no `/dev/accel`
-> passthrough). OpenVINO inside the `ovms-llm` container does not detect an
-> NPU (`Available devices for Open VINO: CPU, GPU`). Setting
-> `TARGET_DEVICE=NPU` may cause OVMS startup/inference-compilation failure
-> and container restart loops.
->
-> **RAG service has a separate, independent NPU limitation.** When
-> `TARGET_DEVICE=NPU` is set, `rag-service` also attempts to initialize its
-> embedding/reranker components on NPU. The current RAG image does not
-> provide the required NPU compiler/runtime support
-> (`libopenvino_intel_npu_compiler.so` is missing), therefore NPU is
-> currently unsupported for the RAG service as well — independent of
-> whether `ovms-llm` itself is healthy.
->
-> **Use `TARGET_DEVICE=CPU` or `TARGET_DEVICE=GPU`.** Do not configure
-> `TARGET_DEVICE=NPU` for the current OVMS/RAG deployment.
+> Forcing static/bounded shapes to work around this is not recommended:
+> it would require padding every input to a fixed max length (wasting
+> compute on short queries) and serializing what is currently a batched
+> reranker call into one NPU invocation per candidate — likely slower
+> overall than `GPU`/`CPU`, for a component that is not the latency
+> bottleneck (the LLM is). `CPU` is normally fast enough for
+> embedding/reranking; `GPU` is the default to match prior behavior.
 
 ## Environment Variables
 
@@ -457,22 +496,30 @@ This section provides a complete step-by-step workflow to run the Smart Kiosk As
 > (`QUEUE_DEVICE=NPU`) support NPU — see
 > [Queue Service Device](#queue-service-device-queue_device) above.
 > `audio-analyzer` diarization does **not** (see
-> [Audio Analyzer Diarization Device](#audio-analyzer-diarization-device-configyaml)),
-> `identity-service` does **not** currently (missing NPU device passthrough —
-> see [Identity Service Device](#identity-service-device-identity_device)),
-> `ovms-llm`/`rag-service` do **not** currently (missing NPU device
-> passthrough for `ovms-llm`, missing NPU compiler library for `rag-service`
-> — see [OVMS-LLM / RAG Service Device](#ovms-llm--rag-service-device-target_device)),
-> and `text-to-speech` does not support NPU at all. Do not set NPU on the
+> [Audio Analyzer Diarization Device](#audio-analyzer-diarization-device-configyaml)).
+> `identity-service` has NPU device passthrough and its face detection/
+> re-identification models compile and run on NPU; its voice model
+> (ECAPA-TDNN) does **not** — see
+> [Identity Service Device](#identity-service-device-identity_device).
+> `ovms-llm` has NPU device passthrough and its model compiles on NPU, but
+> live inference has been observed to fail at runtime — see
+> [OVMS-LLM Device](#ovms-llm-device-target_device) for the exact errors
+> observed; validate end-to-end before relying on it in production.
+> `rag-service`'s embedding/reranker models do **not** support NPU (dynamic
+> shapes rejected by the NPU compiler) and are configured independently of
+> `TARGET_DEVICE` — see
+> [RAG Service Embedding/Reranker Device](#rag-service-embeddingreranker-device-rag_embedding_device-rag_reranker_device).
+> `text-to-speech` does not support NPU at all. Do not set NPU on the
 > unsupported services/components — they will either fail to start or
 > silently disable the affected feature.
 >
 > | Component | CPU | GPU | NPU |
 > |---|---|---|---|
 > | Queue Service (`QUEUE_DEVICE`) | Yes | Yes | Yes |
-> | Identity Service (`IDENTITY_DEVICE`) | Yes | Yes | No — missing NPU device passthrough |
-> | OVMS-LLM (`TARGET_DEVICE`) | Yes | Yes | No — missing NPU device passthrough |
-> | RAG Service (`TARGET_DEVICE`) | Yes | Yes | No — missing NPU compiler library in image |
+> | Identity Service — face/re-id (`IDENTITY_DEVICE`) | Yes | Yes | Yes |
+> | Identity Service — voice/ECAPA-TDNN (`IDENTITY_DEVICE`) | Yes | Yes | No — dynamic STFT reshape rejected by NPU compiler |
+> | OVMS-LLM (`TARGET_DEVICE`) | Yes | Yes | Compiles, but runtime inference failures observed — validate before production use |
+> | RAG Service embedding/reranker (`RAG_EMBEDDING_DEVICE` / `RAG_RERANKER_DEVICE`) | Yes | Yes | No — dynamic shapes rejected by NPU compiler |
 > | Text-to-Speech (`models.tts.device`) | Yes | Yes | No |
 > | Audio Analyzer ASR (`models.asr.device`) | Yes | Yes | Yes (OpenVINO provider only — see [ASR Support Matrix](#asr-support-matrix)) |
 > | Audio Analyzer Diarization (`models.diarization.device`) | Yes | No — currently deployed configuration only supports CPU | No — currently deployed configuration only supports CPU |

@@ -335,12 +335,17 @@ services:
       # of calling a tool). Tunable from .env without a rebuild.
       AGENT_MAX_TOKENS: ${AGENT_MAX_TOKENS:-192}
       # Embedding + reranker models are loaded in-process via OpenVINO at
-      # startup (config.yaml pins device: GPU for both). Override with
-      # TARGET_DEVICE=CPU (same variable used for the ovms-llm container) so
-      # environments without a GPU (e.g. CI runners) don't crash on startup
-      # with "[GPU] no supported devices found".
-      SMART_KIOSK_RAG__MODELS__EMBEDDING__DEVICE: ${TARGET_DEVICE:-GPU}
-      SMART_KIOSK_RAG__RETRIEVAL__RERANKER__DEVICE: ${TARGET_DEVICE:-GPU}
+      # startup. These are intentionally decoupled from TARGET_DEVICE (which
+      # only controls the ovms-llm container): both models are exported by
+      # optimum-intel with dynamic (unbounded) sequence-length shapes, which
+      # the NPU compiler rejects ("Missing upper bound for one or more
+      # nodes"). NPU is not a supported value here — use CPU or GPU. CPU is
+      # normally fast enough for embedding/reranking; GPU is the default to
+      # match prior behavior. Override independently via RAG_EMBEDDING_DEVICE
+      # / RAG_RERANKER_DEVICE so environments without a GPU (e.g. CI runners)
+      # don't crash on startup with "[GPU] no supported devices found".
+      SMART_KIOSK_RAG__MODELS__EMBEDDING__DEVICE: ${RAG_EMBEDDING_DEVICE:-GPU}
+      SMART_KIOSK_RAG__RETRIEVAL__RERANKER__DEVICE: ${RAG_RERANKER_DEVICE:-GPU}
       # Retrieval recall knobs. Defaults live in rag-service/config.yaml and
       # are calibrated against the QuickBite KB; override per-deployment when
       # the knowledge base changes materially, since the reranker's logit
@@ -444,6 +449,9 @@ services:
       - "8000:8000"  # REST / OpenAI-compatible /v3
     devices:
       - /dev/dri:/dev/dri
+      # Intel NPU passthrough — same ACCEL_MOUNT_PATH mechanism as audio-analyzer
+      # and queue-service. Defaults to /dev/null (no-op) on hosts without an NPU.
+      - ${ACCEL_MOUNT_PATH:-/dev/null}:/dev/accel/accel0
     group_add:
       - video
       - "${RENDER_GID:-992}"
@@ -455,6 +463,9 @@ services:
       - ovms_ov_cache:/tmp/ov_cache
     environment:
       OV_CACHE_DIR: /tmp/ov_cache
+      # Required for Level Zero to enumerate the Intel NPU. Harmless when no
+      # NPU node is mapped — OpenVINO then reports CPU/GPU only.
+      ZE_ENABLE_ALT_DRIVERS: libze_intel_npu.so
     command: >
       --rest_port 8000
       --port 9000
@@ -600,6 +611,9 @@ services:
       - "8013:8013"
     devices:
       - /dev/dri:/dev/dri
+      # Intel NPU passthrough — same ACCEL_MOUNT_PATH mechanism as audio-analyzer
+      # and queue-service. Defaults to /dev/null (no-op) on hosts without an NPU.
+      - ${ACCEL_MOUNT_PATH:-/dev/null}:/dev/accel/accel0
     group_add:
       - video
       - "${RENDER_GID:-992}"
@@ -611,6 +625,9 @@ services:
       IDENTITY_DEVICE:           "${IDENTITY_DEVICE:-GPU}"
       IDENTITY_CONFIG_YAML:      /app/configs/identity/identity_config.yaml
       IDENTITY_PROMPTS_YAML:     /app/configs/identity/verification_prompts.yaml
+      # Required for Level Zero to enumerate the Intel NPU. Harmless when no
+      # NPU node is mapped — OpenVINO then reports CPU/GPU only.
+      ZE_ENABLE_ALT_DRIVERS:     libze_intel_npu.so
       NO_PROXY: "localhost,127.0.0.1,ovms-llm,kiosk-core,audio-analyzer,text-to-speech,metrics-collector,rag-service,identity-service,172.16.0.0/12,10.0.0.0/8"
       no_proxy: "localhost,127.0.0.1,ovms-llm,kiosk-core,audio-analyzer,text-to-speech,metrics-collector,rag-service,identity-service,172.16.0.0/12,10.0.0.0/8"
     volumes:

@@ -273,10 +273,17 @@ jobs:
         # can be a newer rc/dev tag) before its own `RELEASE_TAG ?= 2026.1.0`
         # default, causing `make build` to pull non-existent rc images from
         # Docker Hub. Appending here ensures the last assignment in .env wins.
+        # RAG_EMBEDDING_DEVICE / RAG_RERANKER_DEVICE must be set to CPU too:
+        # they default to GPU (decoupled from TARGET_DEVICE since NPU/GPU
+        # aren't viable for these models on all hosts) and GitHub-hosted
+        # runners have no GPU, so rag-service would otherwise fail to start
+        # with "[GPU] no supported devices found".
         run: |
           cp .env.example .env
           echo "KIOSK_CORE_DIARIZATION_ENABLED=false" >> .env
           echo "TARGET_DEVICE=CPU" >> .env
+          echo "RAG_EMBEDDING_DEVICE=CPU" >> .env
+          echo "RAG_RERANKER_DEVICE=CPU" >> .env
           echo "RELEASE_TAG=${RELEASE_TAG}" >> .env
           # .env.example hardcodes the INT8 model name; override it to match
           # whichever quant CI_OVMS_QUANT (top of workflow) actually downloaded.
