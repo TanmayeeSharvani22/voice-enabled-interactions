@@ -31,7 +31,7 @@ The **Devices** column lists the supported inference devices for each:
 
 | Service | Field | Default (validated) | Other examples | Devices |
 |---|---|---|---|---|
-| `audio-analyzer` ASR | `models.asr.name` | `whisper-base` | `whisper-tiny`, `whisper-small`, `whisper-medium`, `whisper-large` | `CPU`, `GPU`, `NPU` (`GPU`/`NPU` require `provider: openvino`) |
+| `audio-analyzer` ASR | `models.asr.name` | `whisper-base` | `whisper-tiny`, `whisper-small`, `whisper-medium`, `whisper-large` | `CPU`, `GPU` (`provider: openvino` required for `GPU`; `NPU` is not supported — see [ASR Support Matrix](#asr-support-matrix)) |
 | `audio-analyzer` sentiment | `sentiment.model` | `speechbrain/emotion-recognition-wav2vec2-IEMOCAP` | other SpeechBrain emotion-recognition models | `CPU`, `GPU` (disabled by default) |
 | `text-to-speech` | `models.tts.name` | `microsoft/speecht5_tts` (SpeechT5) | `Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice` (Qwen-TTS) | `CPU`, `GPU` (`int4` on iGPU produces noise; use `fp16` or `int8` on GPU) |
 | `rag-service` LLM | `models.llm.hf_id` | `Qwen/Qwen3-4B-Instruct-2507` | other OpenVINO-exportable instruct LLMs | `CPU`, `GPU` (`GPU` recommended for acceptable latency) |
@@ -108,7 +108,7 @@ This repository treats it as the single source of truth. Configure:
 - `models.asr.device`
 
 There is exactly one checked-in Compose file in this project: `docker-compose.yml`.
-No checked-in hardware-specific Compose override files are used (the Makefile may generate a temporary runtime override under `/tmp` to inject `/dev/accel` for the OpenVINO+NPU case).
+No checked-in hardware-specific Compose override files are used (the Makefile may generate a temporary runtime override under `/tmp` to inject `/dev/accel` when NPU is configured for `queue-service` or `identity-service`).
 `docker-compose.yml` provides container runtime access, while ASR
 provider/device selection remains in `config.yaml` only. Provider/device
 is validated before startup by `make check-env`; startup is rejected early
@@ -116,91 +116,28 @@ with actionable errors when configured hardware is unavailable.
 
 The NPU device mapping is controlled by `ACCEL_MOUNT_PATH` in the Compose
 environment. The checked-in Compose file defaults that mapping to
-`/dev/null`, so CPU/GPU-only hosts can start cleanly. For OpenVINO + NPU,
-`make up` auto-detects the host Intel NPU node, validates that OpenVINO can
-see it inside the container, and exports that path for the Compose run.
-For direct `docker compose up`, set `ACCEL_MOUNT_PATH` in `.env` or the
-shell to the host NPU device node first.
+`/dev/null`, so CPU/GPU-only hosts can start cleanly. `make up` auto-detects
+the host Intel NPU node and exports that path for the Compose run whenever
+NPU is configured for any component (see
+[NPU Deployment Workflow](#npu-deployment-workflow) below for which
+components actually work on NPU). For direct `docker compose up`, set
+`ACCEL_MOUNT_PATH` in `.env` or the shell to the host NPU device node first.
 
-Recommended workflow for OpenVINO + NPU:
+> [!NOTE]
+> This `ACCEL_MOUNT_PATH` / `make up` NPU auto-detection mechanism is real
+> and used by `queue-service` and `identity-service` (face/re-id), which do
+> run on NPU — see [NPU Deployment Workflow](#npu-deployment-workflow). It
+> does **not** mean `models.asr.device=NPU` works; see
+> [ASR Support Matrix](#asr-support-matrix) below.
 
-```bash
-make check-env
-make up
-```
+### OpenVINO Whisper on NPU — Not Currently Supported
 
-When `models.asr.provider=openvino` and `models.asr.device=NPU`, `make`
-automatically detects a host NPU node under `/dev/accel/accel*` (for
-example `/dev/accel/accel0`) and passes it to Compose through
-`ACCEL_MOUNT_PATH`.
-
-Direct Compose workflow (no Makefile wrapper):
-
-```bash
-ACCEL_MOUNT_PATH=/dev/accel/accel0 docker compose up -d audio-analyzer
-```
-
-`/dev/accel/accel0` is a common host path on Meteor Lake systems, but the
-host path may differ by platform. `ACCEL_MOUNT_PATH` always refers to the
-host NPU device node and is mapped into the container as
-`/dev/accel/accel0`.
-
-### Enable OpenVINO Whisper on NPU
-
-Edit `configs/audio-analyzer/config.yaml`:
-
-```yaml
-models:
-  asr:
-    provider: openvino
-    device: NPU
-```
-
-Then restart `audio-analyzer`:
-
-```bash
-make check-env
-make up
-```
-
-If you intentionally run Compose directly (without `make`), provide the NPU
-host device path explicitly:
-
-```bash
-ACCEL_MOUNT_PATH=/dev/accel/accel0 docker compose up -d audio-analyzer
-```
-
-Verify effective environment and health:
-
-```bash
-docker exec audio-analyzer env | grep AUDIO_ANALYZER
-docker logs audio-analyzer
-curl http://localhost:8010/health
-```
-
-Also verify that compose is not injecting ASR provider/device overrides:
-
-```bash
-docker compose config | grep AUDIO_ANALYZER__MODELS__ASR__
-```
-
-The provider/device override keys should not be present.
-
-Hardware checks happen before startup:
-
-- `provider=openvino, device=CPU` does not require GPU/NPU nodes.
-- `provider=openvino, device=GPU` requires Intel GPU detection.
-- `provider=openvino, device=NPU` requires Intel NPU detection and
-  container-level OpenVINO visibility.
-- Missing requested hardware fails during `make check-env` (no fallback).
-
-`ACCEL_MOUNT_PATH` drives NPU passthrough for `audio-analyzer`.
-CPU/GPU paths do not require `/dev/accel`; the Compose default maps
-`/dev/null` instead.
-
-Look for startup log lines showing OpenVINO Whisper loaded on `NPU`
-(for example `Loading Model: model name=whisper-base, device=NPU`) and
-`Application startup complete.`
+> [!WARNING]
+> Setting `provider: openvino, device: NPU` passes `make check-env`'s
+> device-visibility check (OpenVINO does report an `NPU` device) but the
+> container then fails at startup when it tries to compile the Whisper
+> model. See [ASR Support Matrix](#asr-support-matrix) below for the exact
+> error and root cause. Use `CPU` or `GPU` for `models.asr.device` instead.
 
 ### Other Supported ASR Configurations
 
@@ -231,7 +168,7 @@ models:
     device: CPU
 ```
 
-### Unsupported Combinations: OpenAI + GPU/NPU
+### Unsupported Combinations: OpenAI + GPU/NPU, and OpenVINO + NPU
 
 `models.asr.provider=openai` supports `CPU` only in this stack.
 The following are not supported by the current OpenAI/PyTorch Whisper backend:
@@ -239,9 +176,13 @@ The following are not supported by the current OpenAI/PyTorch Whisper backend:
 - `models.asr.provider=openai` with `models.asr.device=GPU`
 - `models.asr.provider=openai` with `models.asr.device=NPU`
 
-- Use `openvino + NPU` for NPU execution.
+`models.asr.provider=openvino` with `models.asr.device=NPU` is also **not
+supported** — see [ASR Support Matrix](#asr-support-matrix) below for the
+observed compile-time error.
+
 - Use `openvino + GPU` for GPU execution.
-- For OpenAI/PyTorch Whisper, use a supported device such as `CPU`.
+- Use `openvino + CPU` or `openai + CPU` for CPU execution.
+- NPU is not currently a working option for ASR with any provider.
 
 ### ASR Support Matrix
 
@@ -249,11 +190,42 @@ The following are not supported by the current OpenAI/PyTorch Whisper backend:
 |---|---|---|---|
 | `openai` | Yes | No | No |
 | `whispercpp` | Yes | No | No |
-| `openvino` | Yes | Yes (Intel GPU required) | Yes (Intel NPU required, and `ACCEL_MOUNT_PATH` must point at the host NPU device for Compose runs) |
+| `openvino` | Yes | Yes (Intel GPU required) | No — see note below |
 
-If `GPU` or `NPU` is configured and unavailable on the host,
-`make check-env` fails before any container startup. The stack does not
-silently fall back to another device.
+If `GPU` is configured and unavailable on the host, `make check-env` fails
+before any container startup. The stack does not silently fall back to
+another device.
+
+> [!IMPORTANT]
+> **`openvino` + `NPU` was tested end-to-end and does not currently work.**
+> `WhisperPipeline` (both the OpenVINO GenAI backend and the plain OpenVINO
+> encoder/decoder backend, i.e. `use_ov_genai: True` or `False`) fails to
+> compile on NPU for both `whisper-base` and `whisper-small`:
+> ```
+> Missing upper bound for one or more nodes.
+> ```
+> (GenAI backend surfaces this as `Check '!self_attn_nodes.empty()' failed
+> at .../npuw/llm_compiled_model_utils.cpp`.) This is the same class of
+> problem as the `rag-service` embedding/reranker models and the
+> `identity-service` voice model: the exported IR has a dynamic/unbounded
+> sequence-length dimension that the NPU compiler rejects. It is not fixed
+> by choosing a smaller model or switching the GenAI flag. Use `CPU` or
+> `GPU` for ASR; do not set `models.asr.device: NPU`.
+>
+> This contradicts the upstream `audio-analyzer` source
+> (`utils/openvino_runtime_validation.py`, `_OPENVINO_NPU_INFERENCE_UNSUPPORTED`),
+> whose comment claims "whisper-tiny/base/small/medium all pass NPU
+> inference" and only denylists `whisper-large` as NPU-unsupported (a
+> *runtime execution* failure, `ZE_RESULT_ERROR_UNINITIALIZED`). What was
+> actually observed here is a *compile-time* failure for `whisper-base`
+> that the validation module's `_OPENVINO_NPU_INFERENCE_UNSUPPORTED`
+> denylist does not catch, so `make check-env`/startup validation passes
+> but the container then crash-loops. Unlike `identity-service`'s voice
+> model or diarization's embedding model (see
+> `components/asr/diarization/ov_pyannote_diarizer.py`, which pads/crops to
+> a static frame count specifically for NPU), no static-shape workaround
+> exists in the Whisper ASR code path. Re-validate against a newer
+> `audio-analyzer` release before reporting ASR NPU as supported again.
 
 ## Audio Analyzer Diarization Device (`config.yaml`)
 
@@ -489,13 +461,16 @@ Session parameters (chunk duration, silence threshold, etc.) can also be provide
 
 ## NPU Deployment Workflow
 
-This section provides a complete step-by-step workflow to run the Smart Kiosk Assistant with Intel NPU acceleration for Whisper ASR.
+This section provides a complete step-by-step workflow to run the Smart Kiosk Assistant with Intel NPU acceleration where currently supported.
 
 > **Which services support NPU?**
-> `audio-analyzer` ASR (`provider: openvino, device: NPU`) and `queue-service`
-> (`QUEUE_DEVICE=NPU`) support NPU — see
+> `queue-service` (`QUEUE_DEVICE=NPU`) supports NPU — see
 > [Queue Service Device](#queue-service-device-queue_device) above.
-> `audio-analyzer` diarization does **not** (see
+> `audio-analyzer` ASR (`provider: openvino, device: NPU`) does **not** —
+> `WhisperPipeline` fails to compile on NPU (`Missing upper bound for one
+> or more nodes`) for both the OpenVINO GenAI and plain OpenVINO backends —
+> see [ASR Support Matrix](#asr-support-matrix) above for the exact error.
+> `audio-analyzer` diarization does **not** either (see
 > [Audio Analyzer Diarization Device](#audio-analyzer-diarization-device-configyaml)).
 > `identity-service` has NPU device passthrough and its face detection/
 > re-identification models compile and run on NPU; its voice model
@@ -521,8 +496,13 @@ This section provides a complete step-by-step workflow to run the Smart Kiosk As
 > | OVMS-LLM (`TARGET_DEVICE`) | Yes | Yes | Compiles, but runtime inference failures observed — validate before production use |
 > | RAG Service embedding/reranker (`RAG_EMBEDDING_DEVICE` / `RAG_RERANKER_DEVICE`) | Yes | Yes | No — dynamic shapes rejected by NPU compiler |
 > | Text-to-Speech (`models.tts.device`) | Yes | Yes | No |
-> | Audio Analyzer ASR (`models.asr.device`) | Yes | Yes | Yes (OpenVINO provider only — see [ASR Support Matrix](#asr-support-matrix)) |
+> | Audio Analyzer ASR (`models.asr.device`) | Yes | Yes | No — `Missing upper bound for one or more nodes` at compile time (see [ASR Support Matrix](#asr-support-matrix)) |
 > | Audio Analyzer Diarization (`models.diarization.device`) | Yes | No — currently deployed configuration only supports CPU | No — currently deployed configuration only supports CPU |
+>
+> As things currently stand, `queue-service` and `identity-service`
+> face/re-id are the only components confirmed to run inference correctly
+> on NPU in this stack. The remaining steps below configure NPU for
+> `queue-service`; adapt the device variable if testing another component.
 
 ### 1 — System requirements
 
@@ -551,20 +531,21 @@ lsmod | grep intel_vpu
 ls -la /dev/accel/accel0
 ```
 
-### 3 — Set NPU device in audio-analyzer config
+### 3 — Set NPU device for queue-service
 
-Edit `smart-kiosk-assistant/configs/audio-analyzer/config.yaml`:
+> [!NOTE]
+> Earlier revisions of this guide walked through setting
+> `models.asr.device=NPU` for Whisper ASR here. That configuration does
+> **not work** — see [ASR Support Matrix](#asr-support-matrix) above. This
+> workflow now uses `queue-service`, the component confirmed to run
+> correctly on NPU in this stack.
 
-```yaml
-models:
-  asr:
-    provider: openvino
-    device: NPU
-    name: whisper-base  # whisper-tiny recommended for NPU latency targets
-    weight_format: null  # NPU uses FP16 by default; INT8 is not required
+Set `QUEUE_DEVICE=NPU` in `.env`:
+
+```bash
+# .env
+QUEUE_DEVICE=NPU
 ```
-
-> **Model recommendation for NPU:** Use `whisper-tiny` or `whisper-base`. Larger models increase NPU compiler warmup time on first inference.
 
 ### 4 — Start the stack
 
@@ -590,19 +571,24 @@ ACCEL_MOUNT_PATH=/dev/accel/accel0 docker compose up -d
 ### 5 — Verify NPU is active
 
 ```bash
-# Check audio-analyzer started healthy
-docker ps --filter "name=audio-analyzer" --format "{{.Names}}\t{{.Status}}"
+# Check queue-service started healthy
+docker ps --filter "name=queue-service" --format "{{.Names}}\t{{.Status}}"
 
 # Confirm NPU device is visible to OpenVINO inside the container
-docker exec audio-analyzer python3 -c "import openvino as ov; print(ov.Core().available_devices)"
+docker exec queue-service python3 -c "import openvino as ov; print(ov.Core().available_devices)"
 # Expected output includes: NPU
 
-# Check the service is using the NPU provider
-curl -s http://localhost:8010/v1/model-info | python3 -m json.tool
-# Look for: "provider": "openvino", "device": "NPU"
+# Check the gvainference pipeline is targeting device=NPU
+docker logs queue-service 2>&1 | grep -i "device=NPU\|npu"
+```
 
-# Check logs for successful NPU model load
-docker logs audio-analyzer 2>&1 | grep -i "npu\|compile"
+Optionally, verify NPU device passthrough for `identity-service`
+(face/re-id only — voice will remain disabled, see
+[Identity Service Device](#identity-service-device-identity_device)):
+
+```bash
+IDENTITY_DEVICE=NPU make up IDENTITY=true
+docker logs identity-service 2>&1 | grep -i "face\|voice\|inference_ready"
 ```
 
 ### 6 — Troubleshooting
@@ -610,9 +596,11 @@ docker logs audio-analyzer 2>&1 | grep -i "npu\|compile"
 | Symptom | Cause | Fix |
 |---|---|---|
 | Container unhealthy, `NPU not in available_devices` | NPU driver not loaded or `/dev/accel/accel0` not mapped | Verify host driver and set `ACCEL_MOUNT_PATH` |
-| `libopenvino_intel_npu_compiler_loader.so` missing | NPU compiler not in image | Rebuild the `audio-analyzer` image with NPU user-space packages |
+| `libopenvino_intel_npu_compiler_loader.so` missing | NPU compiler not in image | Rebuild the affected image with NPU user-space packages |
 | Slow first inference (20–60 s) | NPU compiler cache is empty (cold start) | Normal on first run; subsequent requests will be fast |
-| Non-NPU containers unhealthy after NPU config change | NPU-unrelated services picking up wrong env | Only modify `configs/audio-analyzer/config.yaml`; do not add `ASR_DEVICE=NPU` to `.env` (affects all services) |
+| `audio-analyzer` crash-loops with `Missing upper bound for one or more nodes` after setting `models.asr.device=NPU` | Whisper's OpenVINO IR has dynamic/unbounded shapes the NPU compiler rejects — this is not fixable via config | Set `models.asr.device` to `CPU` or `GPU` instead |
+| Non-NPU containers unhealthy after NPU config change | NPU-unrelated services picking up wrong env | Only modify the specific component's config (e.g. `QUEUE_DEVICE`, `IDENTITY_DEVICE`); do not set `models.asr.device=NPU` |
 
 > **Cold-start note:** The OpenVINO NPU compiler caches compiled kernels inside the container under `/tmp/ov_cache/`. The first inference after a container restart takes significantly longer (20–60 s) while the cache warms up. This is expected behavior.
+
 

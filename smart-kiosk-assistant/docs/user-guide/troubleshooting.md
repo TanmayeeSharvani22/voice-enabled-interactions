@@ -51,8 +51,9 @@ The device field lives in the per-service pinned config (see
 does not appear in the logs:
 
 - Check the value is supported for that model (e.g. `audio-analyzer`
-  ASR supports `CPU` for `provider: openai`, and `CPU|GPU|NPU` for
-  `provider: openvino`).
+  ASR supports `CPU` for `provider: openai`, and `CPU|GPU` for
+  `provider: openvino` — `NPU` is not currently supported for ASR, see
+  [ASR Support Matrix](./get-started/configuration.md#asr-support-matrix)).
 - For `GPU`: confirm `/dev/dri` exists and the Intel OpenVINO GPU
   runtime is installed.
 - Restart the affected service after the change:
@@ -84,12 +85,23 @@ docker logs audio-analyzer
 ASR provider/device. The ASR selection is read only from
 `configs/audio-analyzer/config.yaml`.
 
-For `openvino + NPU`, `audio-analyzer` uses `ACCEL_MOUNT_PATH` to map the
-host NPU device node into `/dev/accel/accel0` inside the container. The
-checked-in Compose file defaults that mapping to `/dev/null` so CPU/GPU-only
-hosts stay safe. `make up` auto-detects and validates the host NPU node when
-the ASR config requests OpenVINO + NPU; for direct `docker compose up`, set
-`ACCEL_MOUNT_PATH` in `.env` or the shell first.
+> [!IMPORTANT]
+> `audio-analyzer` ASR does **not** support `device: NPU` for any
+> provider — it fails to compile on NPU. Do not set
+> `models.asr.device: NPU`. See
+> [ASR Support Matrix](./get-started/configuration.md#asr-support-matrix)
+> for the exact error and root cause. The `ACCEL_MOUNT_PATH` / NPU
+> device-mapping guidance below applies to `queue-service` and
+> `identity-service` (face/re-id), which do run on NPU — not to
+> `audio-analyzer`.
+
+For NPU-capable services (`queue-service`, `identity-service` face/re-id),
+`docker-compose.yml` uses `ACCEL_MOUNT_PATH` to map the host NPU device
+node into `/dev/accel/accel0` inside the container. The checked-in Compose
+file defaults that mapping to `/dev/null` so CPU/GPU-only hosts stay safe.
+`make up` auto-detects and validates the host NPU node whenever an NPU
+device is configured for one of these services; for direct
+`docker compose up`, set `ACCEL_MOUNT_PATH` in `.env` or the shell first.
 
 Operational distinction:
 
@@ -97,12 +109,12 @@ Operational distinction:
   OpenVINO NPU visibility, and passes the detected node through
   `ACCEL_MOUNT_PATH`.
 - `docker compose up` does not run that Makefile detection logic; when
-  `provider=openvino` and `device=NPU` are configured, provide
+  `QUEUE_DEVICE=NPU` or `IDENTITY_DEVICE=NPU` is configured, provide
   `ACCEL_MOUNT_PATH` explicitly.
 
-`audio-analyzer` does not need `privileged: true` for this path; explicit
+These services do not need `privileged: true` for this path; explicit
 `/dev/dri` plus the NPU device mapping and Level Zero runtime libraries are
-the least-privilege contract the image expects.
+the least-privilege contract the images expect.
 
 Before startup, run:
 
@@ -113,12 +125,13 @@ make check-env
 `make check-env` enforces provider/device support and host hardware
 availability:
 
-- `openai + CPU` allowed
-- `openai + GPU/NPU` rejected
-- `openvino + CPU` allowed
-- `openvino + GPU` requires Intel GPU detection
-- `openvino + NPU` requires Intel NPU detection and successful container
-  visibility of the mapped device
+- `openai + CPU` allowed (audio-analyzer)
+- `openai + GPU/NPU` rejected (audio-analyzer)
+- `openvino + CPU` allowed (audio-analyzer)
+- `openvino + GPU` requires Intel GPU detection (audio-analyzer)
+- `openvino + NPU` is rejected for `audio-analyzer` — ASR does not support NPU
+- `QUEUE_DEVICE=NPU` / `IDENTITY_DEVICE=NPU` require Intel NPU detection and
+  successful container visibility of the mapped device
 
 If requested GPU/NPU hardware is missing, startup is rejected early with
 an actionable error. No silent fallback is performed.
@@ -138,26 +151,32 @@ ls -l /dev/accel/
 make check-env
 ```
 
-For direct Compose runs, start with an explicit host NPU mapping (example):
+For direct Compose runs, start with an explicit host NPU mapping (example,
+for `queue-service` or `identity-service`):
 
 ```bash
-ACCEL_MOUNT_PATH=/dev/accel/accel0 docker compose up -d audio-analyzer
+ACCEL_MOUNT_PATH=/dev/accel/accel0 docker compose up -d queue-service
 ```
 
 `/dev/accel/accel0` is a common path, but the host node may differ by
 platform. Use the node discovered on your host.
 
-### OpenAI + GPU/NPU Fails for Whisper ASR
+### `models.asr.device=NPU` Fails to Compile for `audio-analyzer`
 
-The current OpenAI/PyTorch Whisper backend supports `CPU` only.
+`audio-analyzer` ASR does not support NPU for either the `openai` or
+`openvino` provider:
 
 - Unsupported: `provider: openai` + `device: GPU`
 - Unsupported: `provider: openai` + `device: NPU`
-- Supported NPU path: `provider: openvino` + `device: NPU`
-- Supported GPU path: `provider: openvino` + `device: GPU`
+- **Unsupported: `provider: openvino` + `device: NPU`** — fails at model
+  compile time with `Missing upper bound for one or more nodes` (see
+  [ASR Support Matrix](./get-started/configuration.md#asr-support-matrix))
+- Supported: `provider: openvino` + `device: GPU`
+- Supported: `provider: openai` or `provider: openvino` + `device: CPU`
 
-If you hit startup/model-load errors with `openai + GPU/NPU`, switch to
-`openvino + GPU/NPU` (or use `openai + CPU`) and recreate `audio-analyzer`:
+If you hit startup/model-load errors with `openai + GPU/NPU` or
+`openvino + NPU`, switch to `openvino + GPU` (or `+ CPU`) and recreate
+`audio-analyzer`:
 
 ```bash
 docker compose down
@@ -168,38 +187,33 @@ curl http://localhost:8010/health
 
 ### `TARGET_DEVICE=NPU` Causes OVMS/RAG to Restart-Loop
 
-If `TARGET_DEVICE=NPU` is configured for the current OVMS/RAG deployment,
-`ovms-llm` and `rag-service` may fail during startup because NPU is not
-currently supported in the deployed configuration. This can result in
-unhealthy containers or restart loops:
+If `TARGET_DEVICE=NPU` is configured, `ovms-llm` compiles successfully on
+NPU (this device mapping is supported), but real chat-completion requests
+currently fail at inference time (`Input length exceeds the maximum
+allowed length` / `Calculator::Process() for node "LLMExecutor" failed`) —
+see [OVMS-LLM Device](./get-started/configuration.md#ovms-llm-device-target_device).
+`rag-service`'s own embedding/reranker device is independent of
+`TARGET_DEVICE` (see `RAG_EMBEDDING_DEVICE`/`RAG_RERANKER_DEVICE`) and
+defaults to `GPU`; do not set it to `NPU` — the embedding/reranker models
+also fail to compile on NPU (`Missing upper bound for one or more nodes`).
 
-- `ovms-llm`: the container only has `/dev/dri` mapped (no `/dev/accel`
-  passthrough), so OpenVINO inside the container does not detect an NPU
-  (`Available devices for Open VINO: CPU, GPU`). Forcing `TARGET_DEVICE=NPU`
-  causes an OpenVINO compilation failure and the container restarts
-  repeatedly under `restart: unless-stopped`.
-- `rag-service`: fails independently, for a different reason — its
-  embedding/reranker components also pick up `TARGET_DEVICE=NPU` and the
-  current RAG image does not provide the required NPU compiler/runtime
-  library (`libopenvino_intel_npu_compiler.so`), causing the service's
-  startup to fail and restart-loop even if `ovms-llm` were healthy.
-
-Set `TARGET_DEVICE=CPU` or `TARGET_DEVICE=GPU` in `.env` and recreate both
-services:
+Set `TARGET_DEVICE=CPU` or `TARGET_DEVICE=GPU` in `.env` and recreate
+`ovms-llm`:
 
 ```bash
-docker compose up -d --force-recreate ovms-llm rag-service
-docker inspect ovms-llm rag-service --format '{{.Name}}: {{.State.Status}} RestartCount={{.RestartCount}}'
+docker compose up -d --force-recreate ovms-llm
+docker inspect ovms-llm --format '{{.Name}}: {{.State.Status}} RestartCount={{.RestartCount}}'
 ```
 
-### `IDENTITY_DEVICE=NPU` Is Not Supported
+### `IDENTITY_DEVICE=NPU` — Face/Re-ID Works, Voice Does Not
 
-`IDENTITY_DEVICE=NPU` is currently unsupported because the
-`identity-service` container does not expose the NPU device
-(`docker-compose.yml` only maps `/dev/dri` for this service, not
-`/dev/accel`). Setting `IDENTITY_DEVICE=NPU` will not cause a crash, but
-OpenVINO will never see an NPU device inside the container. Use
-`IDENTITY_DEVICE=CPU` or `IDENTITY_DEVICE=GPU` instead — see
+`IDENTITY_DEVICE=NPU` is supported for the face detection and
+re-identification models — `docker-compose.yml` maps the NPU device via
+`ACCEL_MOUNT_PATH` for `identity-service` when configured. The voice model
+(ECAPA-TDNN) fails to compile on NPU
+(`Upper bounds are not specified for node ... compute_STFT/aten::view/Reshape`),
+so voice authentication stays disabled (`inference_ready=false`) whenever
+`IDENTITY_DEVICE=NPU`. This is expected — see
 [Identity Service Device](./get-started/configuration.md#identity-service-device-identity_device).
 
 ## Permission Errors on Mounted Folders

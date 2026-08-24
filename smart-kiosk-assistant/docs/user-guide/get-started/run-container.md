@@ -23,19 +23,26 @@ make check-env
 make up
 ```
 
-For OpenVINO + NPU (`models.asr.provider=openvino`,
-`models.asr.device=NPU`), this is the recommended path because the Makefile:
+For NPU-accelerated services (`queue-service` via `QUEUE_DEVICE=NPU`,
+`identity-service` face/re-id via `IDENTITY_DEVICE=NPU`), this is the
+recommended path because the Makefile:
 
 - detects the host NPU node under `/dev/accel/accel*`
-- validates that OpenVINO can see `NPU` inside the `audio-analyzer` container
+- validates that OpenVINO can see `NPU` inside the container
 - passes the detected host node through `ACCEL_MOUNT_PATH`
 
+> [!NOTE]
+> `audio-analyzer` ASR does **not** support NPU — `models.asr.device=NPU`
+> fails to compile for any provider. Use `CPU` or `GPU` for ASR. See
+> [ASR Support Matrix](./configuration.md#asr-support-matrix) and
+> [NPU Deployment Workflow](./configuration.md#npu-deployment-workflow).
+
 Direct Compose behavior is different: it does not run Makefile detection. If
-you intentionally run Compose directly with OpenVINO + NPU, set
-`ACCEL_MOUNT_PATH` yourself:
+you intentionally run Compose directly with an NPU device configured for
+`queue-service` or `identity-service`, set `ACCEL_MOUNT_PATH` yourself:
 
 ```bash
-ACCEL_MOUNT_PATH=/dev/accel/accel0 docker compose up -d audio-analyzer
+ACCEL_MOUNT_PATH=/dev/accel/accel0 docker compose up -d queue-service
 ```
 
 `ACCEL_MOUNT_PATH` is the host NPU device node. The value above is a common
