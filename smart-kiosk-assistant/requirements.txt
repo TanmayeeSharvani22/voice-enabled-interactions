@@ -25,7 +25,7 @@ sounddevice==0.5.1
 # pinned here so the environment is fully reproducible.
 onnxruntime==1.29.0
 tqdm==4.70.0
-scipy==1.18.1
+scipy==1.17.1
 scikit-learn==1.9.0
 requests==2.34.2
 python-certifi-win32==1.6.1

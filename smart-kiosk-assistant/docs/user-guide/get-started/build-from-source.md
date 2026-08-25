@@ -137,7 +137,7 @@ invocation, exactly as the Dockerfile does:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y ffmpeg alsa-utils libsndfile1
+sudo apt-get install -y ffmpeg alsa-utils libsndfile1 libportaudio2
 
 python3.12 -m venv .venv
 source .venv/bin/activate
