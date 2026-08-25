@@ -6,7 +6,28 @@ plotly==5.24.1
 pydantic==2.11.7
 python-multipart==0.0.31
 sounddevice==0.5.1
-openwakeword==0.6.0
+# openwakeword is intentionally NOT listed here. It must be installed in a
+# separate pip invocation with --no-deps:
+#   pip install --no-deps openwakeword==0.6.0
+# Reason: openwakeword==0.6.0 unconditionally declares a dependency on
+# tflite-runtime<3,>=2.8.0 on Linux, and tflite-runtime has no PyPI wheels
+# for Python 3.12+. kiosk-core only uses openwakeword's ONNX inference path
+# (KIOSK_CORE_WAKEWORD_INFERENCE_FRAMEWORK defaults to "onnx" — see
+# kiosk_core/config.py and kiosk_core/wakeword.py); openwakeword's own
+# source (model.py / utils.py) only imports tflite_runtime when
+# inference_framework == "tflite", so tflite-runtime is never exercised at
+# runtime here. If openwakeword were listed directly in this file, pip
+# would still try (and fail) to resolve tflite-runtime for it even though
+# it's already installed with --no-deps, because pip resolves the full
+# requirements set together.
+# The lines below are openwakeword 0.6.0's real, non-tflite runtime
+# dependencies (its declared Requires-Dist entries minus tflite-runtime),
+# pinned here so the environment is fully reproducible.
+onnxruntime==1.29.0
+tqdm==4.70.0
+scipy==1.18.1
+scikit-learn==1.9.0
+requests==2.34.2
 python-certifi-win32==1.6.1
 uvicorn==0.35.0
 

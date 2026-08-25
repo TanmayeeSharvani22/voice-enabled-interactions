@@ -8,6 +8,18 @@ Confirm your machine meets the
 
 ## Prerequisites
 
+### Application Overview
+
+The Smart Kiosk Assistant is a voice-driven quick-service-restaurant (QSR)
+ordering kiosk. The browser captures microphone audio and uploads it to
+`audio-analyzer` (Whisper ASR + speaker diarization); `rag-service` runs the
+RAG pipeline and ordering agent on a Qwen3-4B model served by `ovms-llm`;
+`text-to-speech` synthesizes the spoken reply. `kiosk-core` orchestrates the
+session and product ordering, `kiosk-ui` is the React front end, and
+`rtsp-streamer` + `queue-service` provide person-counting queue analytics.
+`metrics-collector` reports hardware utilization, and the optional
+`identity-service` adds face + voice authentication.
+
 - Ubuntu 22.04 or newer (Linux, Desktop edition — a browser with microphone
   access is required for voice ordering)
 - [Docker](https://docs.docker.com/engine/install/) 24.0+
@@ -22,18 +34,6 @@ Confirm your machine meets the
 > **Note:** First-time setup downloads the OVMS LLM model (~4 GB) plus the
 > in-container ASR, TTS, embedding, and reranker models. Allow extra time on
 > the first run depending on your connection.
-
-## Application Overview
-
-The Smart Kiosk Assistant is a voice-driven quick-service-restaurant (QSR)
-ordering kiosk. The browser captures microphone audio and uploads it to
-`audio-analyzer` (Whisper ASR + speaker diarization); `rag-service` runs the
-RAG pipeline and ordering agent on a Qwen3-4B model served by `ovms-llm`;
-`text-to-speech` synthesizes the spoken reply. `kiosk-core` orchestrates the
-session and product ordering, `kiosk-ui` is the React front end, and
-`rtsp-streamer` + `queue-service` provide person-counting queue analytics.
-`metrics-collector` reports hardware utilization, and the optional
-`identity-service` adds face + voice authentication.
 
 ## Step 1: Install Docker and Intel GPU Drivers
 

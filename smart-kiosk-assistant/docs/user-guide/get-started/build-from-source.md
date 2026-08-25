@@ -126,16 +126,25 @@ The `kiosk-ui` container reuses the `kiosk-core` image and runs
 
 `kiosk-core` and `kiosk-ui` can run directly on the host while the three
 model-hosting services run in containers. Install host packages, then
-create a virtual environment and install dependencies:
+create a virtual environment and install dependencies.
+
+`kiosk-core` requires **Python 3.12** (matching the `python:3.12-slim` base
+image used by the Dockerfile). `openwakeword`'s declared `tflite-runtime`
+dependency has no wheels for Python 3.12+, but `kiosk-core` only uses
+openwakeword's ONNX inference path by default, so install `requirements.txt`
+first, then `openwakeword` itself with `--no-deps` in a separate pip
+invocation, exactly as the Dockerfile does:
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y ffmpeg alsa-utils libsndfile1
 
-python -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
+python --version   # should report Python 3.12.x
 pip install --upgrade pip
 pip install -r requirements.txt
+pip install --no-deps openwakeword==0.6.0
 ```
 
 See [Run On the Host](./run-standalone.md) for the launch commands.
