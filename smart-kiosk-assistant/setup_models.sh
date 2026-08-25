@@ -531,30 +531,22 @@ download_yolo26_model() {
     # container startup and the baked-in static IR is used as-is.
     local export_dir
     export_dir="$(mktemp -d)"
-    "${VENV_DIR}/bin/python" -c "
+    # Recent ultralytics releases ignore project/name for the openvino exporter
+    # and write next to the weights, so the returned path is the source of truth.
+    ( cd "${export_dir}" && "${VENV_DIR}/bin/python" -c "
 from ultralytics import YOLO
 import shutil, os
 model = YOLO('${YOLO26_MODEL_NAME}.pt')
-out = model.export(
-    format='openvino',
-    imgsz=${YOLO26_INPUT_SIZE},
-    dynamic=False,
-    project='${export_dir}',
-    name='export',
-)
-# ultralytics writes: <project>/<name>/<model>_openvino_model/<model>.xml
-src_dir = os.path.join('${export_dir}', 'export', '${YOLO26_MODEL_NAME}_openvino_model')
-if not os.path.isdir(src_dir):
-    # fallback: ultralytics >= 8.3 may place the IR directly under export/
-    src_dir = os.path.join('${export_dir}', 'export')
+out = str(model.export(format='openvino', imgsz=${YOLO26_INPUT_SIZE}, dynamic=False))
+src_dir = out if os.path.isdir(out) else os.path.dirname(out)
 xml_candidates = [f for f in os.listdir(src_dir) if f.endswith('.xml')]
 if not xml_candidates:
     raise RuntimeError(f'No .xml file found in {src_dir}')
-name = xml_candidates[0].replace('.xml', '')
+name = xml_candidates[0][:-4]
 shutil.copy2(os.path.join(src_dir, name + '.xml'), '${xml_path}')
 shutil.copy2(os.path.join(src_dir, name + '.bin'), '${bin_path}')
 print(f'  IR copied: {name}.xml/.bin')
-"
+" )
     rm -rf "${export_dir}"
 
     if [ ! -f "${xml_path}" ] || [ ! -f "${bin_path}" ]; then

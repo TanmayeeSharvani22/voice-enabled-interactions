@@ -5,7 +5,7 @@
 #
 # Default CMD starts the kiosk-core FastAPI service on port 8012.
 # The kiosk-ui React app (kiosk-ui/) is served separately via its own container.
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 ARG APP_UID=1000
 ARG APP_GID=1000
@@ -26,8 +26,17 @@ RUN apt-get update \
 
 COPY requirements.txt ./requirements.txt
 
+# openwakeword==0.6.0 unconditionally declares a tflite-runtime dependency
+# that has no PyPI wheels for Python 3.12+. kiosk-core only uses
+# openwakeword's ONNX inference path by default
+# (KIOSK_CORE_WAKEWORD_INFERENCE_FRAMEWORK=onnx), so tflite-runtime is never
+# actually needed. Its real runtime dependencies are pinned in
+# requirements.txt; openwakeword itself is installed here afterwards with
+# --no-deps so pip does not try to resolve tflite-runtime. See
+# requirements.txt for the full rationale.
 RUN pip install --upgrade pip \
-    && pip install -r requirements.txt
+    && pip install -r requirements.txt \
+    && pip install --no-deps openwakeword==0.6.0
 
 COPY . .
 

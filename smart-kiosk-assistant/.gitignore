@@ -29,3 +29,7 @@ metrics/
 
 # TypeScript incremental build cache (machine/environment-specific)
 kiosk-ui/**/*.tsbuildinfo
+
+# pytest functional-test report (regenerated on every run by
+# tests/functional/conftest.py's pytest_sessionfinish hook) — output, not source.
+tests/functional/test_results.csv
