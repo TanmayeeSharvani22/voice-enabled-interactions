@@ -52,7 +52,8 @@ does not appear in the logs:
 
 - Check the value is supported for that model (e.g. `audio-analyzer`
   ASR supports `CPU` for `provider: openai`, and `CPU|GPU|NPU` for
-  `provider: openvino`).
+  `provider: openvino` — `NPU` only works with `whisper-tiny`/`whisper-base`,
+  see [ASR Support Matrix](./get-started/configuration.md#asr-support-matrix)).
 - For `GPU`: confirm `/dev/dri` exists and the Intel OpenVINO GPU
   runtime is installed.
 - Restart the affected service after the change:
@@ -84,25 +85,19 @@ docker logs audio-analyzer
 ASR provider/device. The ASR selection is read only from
 `configs/audio-analyzer/config.yaml`.
 
-For `openvino + NPU`, `audio-analyzer` uses `ACCEL_MOUNT_PATH` to map the
-host NPU device node into `/dev/accel/accel0` inside the container. The
-checked-in Compose file defaults that mapping to `/dev/null` so CPU/GPU-only
-hosts stay safe. `make up` auto-detects and validates the host NPU node when
-the ASR config requests OpenVINO + NPU; for direct `docker compose up`, set
-`ACCEL_MOUNT_PATH` in `.env` or the shell first.
+> [!IMPORTANT]
+> `audio-analyzer` ASR on NPU works only for `whisper-tiny`/`whisper-base`;
+> `whisper-small`+ fails to compile. `make check-env` does not check model
+> name, so a `whisper-small`+ NPU config passes `check-env` but crash-loops
+> at container startup. See
+> [ASR Support Matrix](./get-started/configuration.md#asr-support-matrix).
 
-Operational distinction:
-
-- `make up` automatically detects `/dev/accel/accel*`, validates container
-  OpenVINO NPU visibility, and passes the detected node through
-  `ACCEL_MOUNT_PATH`.
-- `docker compose up` does not run that Makefile detection logic; when
-  `provider=openvino` and `device=NPU` are configured, provide
-  `ACCEL_MOUNT_PATH` explicitly.
-
-`audio-analyzer` does not need `privileged: true` for this path; explicit
-`/dev/dri` plus the NPU device mapping and Level Zero runtime libraries are
-the least-privilege contract the image expects.
+NPU-capable services (`queue-service`, `identity-service` face/re-id,
+`audio-analyzer` ASR with `whisper-tiny`/`whisper-base`) get the host NPU
+device via `ACCEL_MOUNT_PATH` (defaults to `/dev/null` so CPU/GPU-only
+hosts are unaffected). Neither `make up` nor `make check-env`
+auto-detects this — export `ACCEL_MOUNT_PATH` yourself (or set it in
+`.env`) before starting the stack.
 
 Before startup, run:
 
@@ -110,97 +105,54 @@ Before startup, run:
 make check-env
 ```
 
-`make check-env` enforces provider/device support and host hardware
-availability:
-
-- `openai + CPU` allowed
-- `openai + GPU/NPU` rejected
-- `openvino + CPU` allowed
-- `openvino + GPU` requires Intel GPU detection
-- `openvino + NPU` requires Intel NPU detection and successful container
-  visibility of the mapped device
-
-If requested GPU/NPU hardware is missing, startup is rejected early with
-an actionable error. No silent fallback is performed.
-
 ### Error: OpenVINO does not report an NPU device
-
-If startup fails with:
-
-```text
-OpenVINO does not report an NPU device
-```
-
-use this sequence:
 
 ```bash
 ls -l /dev/accel/
 make check-env
 ```
 
-For direct Compose runs, start with an explicit host NPU mapping (example):
+For direct Compose runs, set the mapping explicitly:
 
 ```bash
-ACCEL_MOUNT_PATH=/dev/accel/accel0 docker compose up -d audio-analyzer
+ACCEL_MOUNT_PATH=/dev/accel/accel0 docker compose up -d queue-service
 ```
 
-`/dev/accel/accel0` is a common path, but the host node may differ by
-platform. Use the node discovered on your host.
+### `models.asr.device=NPU` Fails to Compile for `audio-analyzer`
 
-### OpenAI + GPU/NPU Fails for Whisper ASR
+| Provider + Device | Model | Result |
+|---|---|---|
+| `openvino` + `NPU` | `whisper-tiny`/`whisper-base` | ✅ Works |
+| `openvino` + `NPU` | `whisper-small`+ | ❌ `Check '!self_attn_nodes.empty()' failed` |
+| `openvino` + `GPU`/`CPU` | any | ✅ Works |
+| `openai` + `GPU`/`NPU` | any | ❌ Not supported (CPU only) |
 
-The current OpenAI/PyTorch Whisper backend supports `CPU` only.
-
-- Unsupported: `provider: openai` + `device: GPU`
-- Unsupported: `provider: openai` + `device: NPU`
-- Supported NPU path: `provider: openvino` + `device: NPU`
-- Supported GPU path: `provider: openvino` + `device: GPU`
-
-If you hit startup/model-load errors with `openai + GPU/NPU`, switch to
-`openvino + GPU/NPU` (or use `openai + CPU`) and recreate `audio-analyzer`:
+Fix: use `whisper-tiny`/`whisper-base` on NPU, or switch to `GPU`/`CPU` for larger models, then recreate:
 
 ```bash
-docker compose down
-docker compose up -d audio-analyzer
+docker compose up -d --force-recreate audio-analyzer
 docker logs audio-analyzer
 curl http://localhost:8010/health
 ```
 
 ### `TARGET_DEVICE=NPU` Causes OVMS/RAG to Restart-Loop
 
-If `TARGET_DEVICE=NPU` is configured for the current OVMS/RAG deployment,
-`ovms-llm` and `rag-service` may fail during startup because NPU is not
-currently supported in the deployed configuration. This can result in
-unhealthy containers or restart loops:
-
-- `ovms-llm`: the container only has `/dev/dri` mapped (no `/dev/accel`
-  passthrough), so OpenVINO inside the container does not detect an NPU
-  (`Available devices for Open VINO: CPU, GPU`). Forcing `TARGET_DEVICE=NPU`
-  causes an OpenVINO compilation failure and the container restarts
-  repeatedly under `restart: unless-stopped`.
-- `rag-service`: fails independently, for a different reason — its
-  embedding/reranker components also pick up `TARGET_DEVICE=NPU` and the
-  current RAG image does not provide the required NPU compiler/runtime
-  library (`libopenvino_intel_npu_compiler.so`), causing the service's
-  startup to fail and restart-loop even if `ovms-llm` were healthy.
-
-Set `TARGET_DEVICE=CPU` or `TARGET_DEVICE=GPU` in `.env` and recreate both
-services:
+`ovms-llm` compiles on NPU but chat-completion requests fail at runtime
+(`Input length exceeds the maximum allowed length`). `rag-service`
+embedding/reranker (`RAG_EMBEDDING_DEVICE`/`RAG_RERANKER_DEVICE`, independent
+of `TARGET_DEVICE`) fails to compile on NPU entirely — don't set either to `NPU`.
 
 ```bash
-docker compose up -d --force-recreate ovms-llm rag-service
-docker inspect ovms-llm rag-service --format '{{.Name}}: {{.State.Status}} RestartCount={{.RestartCount}}'
+# .env: TARGET_DEVICE=CPU or GPU
+docker compose up -d --force-recreate ovms-llm
 ```
 
-### `IDENTITY_DEVICE=NPU` Is Not Supported
+### `IDENTITY_DEVICE=NPU` — Face/Re-ID Works, Voice Does Not
 
-`IDENTITY_DEVICE=NPU` is currently unsupported because the
-`identity-service` container does not expose the NPU device
-(`docker-compose.yml` only maps `/dev/dri` for this service, not
-`/dev/accel`). Setting `IDENTITY_DEVICE=NPU` will not cause a crash, but
-OpenVINO will never see an NPU device inside the container. Use
-`IDENTITY_DEVICE=CPU` or `IDENTITY_DEVICE=GPU` instead — see
-[Identity Service Device](./get-started/configuration.md#identity-service-device-identity_device).
+Face/re-id models run on NPU. The voice model (ECAPA-TDNN) fails to
+compile (`Upper bounds are not specified for node ... compute_STFT`), so
+voice auth stays disabled (`inference_ready=false`) — this is expected.
+See [Identity Service Device](./get-started/configuration.md#identity-service-device-identity_device).
 
 ## Permission Errors on Mounted Folders
 
@@ -231,6 +183,25 @@ docker compose up -d
 Replace `smart-kiosk-assistant_` with whatever Compose project prefix
 `docker volume ls` shows on your host. Resetting a volume forces the
 services to re-download model assets on next startup.
+
+## Browser UI Is Not Accessible Or Loads Blank (Remote Host)
+
+If the kiosk stack runs on a remote/headless machine and
+`http://<remote-ip>:7860` won't load or renders a blank page, the browser
+is refusing the page because it's not a secure origin. Try either fix:
+
+- **SSH port forwarding (recommended)** — tunnel the UI port to
+  `localhost` so the browser treats it as a secure origin:
+
+  ```bash
+  ssh -L 7860:localhost:7860 intel@10.223.23.34
+  ```
+
+  Replace `intel@10.223.23.34` with your actual username/host, then open
+  `http://127.0.0.1:7860` on your local machine.
+- **Chrome insecure-origin flag** — allow the remote URL as a secure
+  origin: open `chrome://flags/#unsafely-treat-insecure-origin-as-secure`,
+  add `http://<remote-ip>:7860`, enable the flag, and relaunch Chrome.
 
 ## Browser UI Does Not Capture Audio
 
