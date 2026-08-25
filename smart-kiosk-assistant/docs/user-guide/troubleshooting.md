@@ -183,6 +183,25 @@ Replace `smart-kiosk-assistant_` with whatever Compose project prefix
 `docker volume ls` shows on your host. Resetting a volume forces the
 services to re-download model assets on next startup.
 
+## Browser UI Is Not Accessible Or Loads Blank (Remote Host)
+
+If the kiosk stack runs on a remote/headless machine and
+`http://<remote-ip>:7860` won't load or renders a blank page, the browser
+is refusing the page because it's not a secure origin. Try either fix:
+
+- **SSH port forwarding (recommended)** — tunnel the UI port to
+  `localhost` so the browser treats it as a secure origin:
+
+  ```bash
+  ssh -L 7860:localhost:7860 intel@10.223.23.34
+  ```
+
+  Replace `intel@10.223.23.34` with your actual username/host, then open
+  `http://127.0.0.1:7860` on your local machine.
+- **Chrome insecure-origin flag** — allow the remote URL as a secure
+  origin: open `chrome://flags/#unsafely-treat-insecure-origin-as-secure`,
+  add `http://<remote-ip>:7860`, enable the flag, and relaunch Chrome.
+
 ## Browser UI Does Not Capture Audio
 
 - Confirm the browser granted microphone permission for
