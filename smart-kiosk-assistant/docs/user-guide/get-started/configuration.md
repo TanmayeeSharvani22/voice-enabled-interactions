@@ -104,11 +104,12 @@ Configure ASR in `configs/audio-analyzer/config.yaml` (single source of truth):
 - `models.asr.device`
 
 `make check-env` validates this before startup and rejects unavailable
-hardware early. For NPU, `make up` auto-detects the host NPU node
-(`/dev/accel/accel*`) and passes it via `ACCEL_MOUNT_PATH`; the checked-in
-`docker-compose.yml` defaults `ACCEL_MOUNT_PATH` to `/dev/null` so
-CPU/GPU-only hosts stay unaffected. For direct `docker compose up`, set
-`ACCEL_MOUNT_PATH` yourself.
+hardware early. For NPU, `ACCEL_MOUNT_PATH` must be set manually (in
+`.env` or the shell) to the host NPU device node (`/dev/accel/accel0`)
+before running `make up` or `docker compose up` — neither `make up` nor
+`make check-env` auto-detects it. The checked-in `docker-compose.yml`
+defaults `ACCEL_MOUNT_PATH` to `/dev/null` so CPU/GPU-only hosts stay
+unaffected.
 
 ### ASR on NPU: `whisper-tiny`/`whisper-base` only
 
@@ -202,8 +203,8 @@ overridden without editing that file via `QUEUE_DEVICE` in `.env`
 - `QUEUE_DEVICE=GPU` / `QUEUE_DEVICE=NPU` — supported, using the same
   `/dev/dri` and `ACCEL_MOUNT_PATH`-driven `/dev/accel` mapping described
   under [Audio Analyzer ASR Provider/Device](#audio-analyzer-asr-providerdevice-configyaml)
-  above. For NPU, set `ACCEL_MOUNT_PATH` to the host NPU device node
-  (auto-detected by `make up`) before starting `queue-service`.
+  above. For NPU, set `ACCEL_MOUNT_PATH` yourself to the host NPU device
+  node before starting `queue-service` — it is not auto-detected.
 
 Verify the configured device actually reached the pipeline:
 
@@ -231,8 +232,9 @@ code itself has no bug and no model-format limitation.
 > The `identity-service` container has NPU device passthrough via the same
 > `ACCEL_MOUNT_PATH`/`/dev/accel` mechanism used by `audio-analyzer` and
 > `queue-service`. Set `IDENTITY_DEVICE=NPU` in `.env` together with
-> `ACCEL_MOUNT_PATH` pointing to the host NPU device node (auto-detected by
-> `make up`) to run face detection/re-identification on the NPU.
+> `ACCEL_MOUNT_PATH` pointing to the host NPU device node — this is not
+> auto-detected and must be set manually — to run face
+> detection/re-identification on the NPU.
 >
 > **Voice-print embedding (`ecapa-tdnn-voice`) does not support `NPU`.**
 > Its OpenVINO IR contains an internal STFT reshape with an unbounded
@@ -263,8 +265,9 @@ below.
 > The `ovms-llm` container has NPU device passthrough via the same
 > `ACCEL_MOUNT_PATH`/`/dev/accel` mechanism used by `audio-analyzer` and
 > `queue-service`. Set `TARGET_DEVICE=NPU` in `.env` together with
-> `ACCEL_MOUNT_PATH` pointing to the host NPU device node (auto-detected by
-> `make up`) to compile the LLM for the NPU. OVMS logs
+> `ACCEL_MOUNT_PATH` pointing to the host NPU device node — this is not
+> auto-detected and must be set manually — to compile the LLM for the
+> NPU. OVMS logs
 > `Available devices for Open VINO: CPU, GPU, NPU` and the model
 > (`Qwen3-4B-int8-ov`) compiles successfully.
 >
@@ -453,19 +456,21 @@ models:
     weight_format: null
 ```
 
-### 4 — Start the stack
+### 4 — Set `ACCEL_MOUNT_PATH` and start the stack
+
+`ACCEL_MOUNT_PATH` is **not** auto-detected by `make up` or
+`make check-env` — export it yourself before starting the stack:
 
 ```bash
+export ACCEL_MOUNT_PATH=/dev/accel/accel0
 cd smart-kiosk-assistant
 make check-env
 make up
 ```
 
-`make up` auto-detects `/dev/accel/accel*` and sets `ACCEL_MOUNT_PATH` automatically. For direct `docker compose up`, set it yourself:
-
-```bash
-ACCEL_MOUNT_PATH=/dev/accel/accel0 docker compose up -d
-```
+Alternatively, set `ACCEL_MOUNT_PATH=/dev/accel/accel0` directly in
+`.env` so it's picked up automatically on every `make up` /
+`docker compose up` without exporting it each time.
 
 ### 5 — Verify NPU is active
 

@@ -25,9 +25,14 @@ make up
 
 For NPU-accelerated services (`queue-service`, `identity-service` face/re-id,
 `audio-analyzer` ASR — `whisper-tiny`/`whisper-base` only, see
-[ASR Support Matrix](./configuration.md#asr-support-matrix)), `make up` is
-recommended: it auto-detects the host NPU node and passes it through
-`ACCEL_MOUNT_PATH`.
+[ASR Support Matrix](./configuration.md#asr-support-matrix)), export
+`ACCEL_MOUNT_PATH` yourself first — it is **not** auto-detected by
+`make up` or `make check-env`:
+
+```bash
+export ACCEL_MOUNT_PATH=/dev/accel/accel0
+make up
+```
 
 For direct `docker compose up` (no Makefile detection), set it yourself:
 

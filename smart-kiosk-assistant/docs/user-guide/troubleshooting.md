@@ -95,8 +95,9 @@ ASR provider/device. The ASR selection is read only from
 NPU-capable services (`queue-service`, `identity-service` face/re-id,
 `audio-analyzer` ASR with `whisper-tiny`/`whisper-base`) get the host NPU
 device via `ACCEL_MOUNT_PATH` (defaults to `/dev/null` so CPU/GPU-only
-hosts are unaffected). `make up` auto-detects and sets this automatically;
-for direct `docker compose up`, set `ACCEL_MOUNT_PATH` yourself.
+hosts are unaffected). Neither `make up` nor `make check-env`
+auto-detects this — export `ACCEL_MOUNT_PATH` yourself (or set it in
+`.env`) before starting the stack.
 
 Before startup, run:
 
