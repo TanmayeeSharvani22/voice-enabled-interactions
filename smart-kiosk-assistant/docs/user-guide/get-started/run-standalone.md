@@ -1,8 +1,10 @@
 # Run On The Host
 
 Use this path to run `kiosk-core` directly on the host instead of inside the
-top-level Compose stack. The microphone is still captured by the browser and
-uploaded to `kiosk-core`.
+top-level Compose stack. This mode starts `kiosk-core`'s HTTP API only — no
+browser UI is started by these steps; interact with it directly through its
+REST endpoints (see [API Reference](../api-reference.md)) or an external
+client that uploads audio to those endpoints.
 
 ## Clone
 
