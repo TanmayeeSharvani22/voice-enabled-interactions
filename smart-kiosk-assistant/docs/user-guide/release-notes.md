@@ -1,57 +1,70 @@
 # Release Notes: Smart Kiosk Assistant
 
-## 2026.2.0-rc2
+## 2026.2.0
 
-This release rebuilds and re-tags every kiosk-related image on top of the
-latest audio-analyzer and text-to-speech microservices, alongside a
-consistent version bump across the stack. This update includes the
-following changes:
-
-- The audio-analyzer service picks up upstream streaming improvements:
-  OpenAI-compatible streaming transcription over Server-Sent Events and a
-  realtime WebSocket transcription endpoint, plus Video Summarization
-  Service (VSS) response compatibility and more accurate multi-speaker
-  segment splitting with persisted enrolment.
-- The text-to-speech service now supports named voices and produces
-  faster, more natural-sounding prosody.
-- `audio-analyzer` and `text-to-speech` are now built and published at
-  `2026.2.0-rc2`, replacing the previously pinned `2026.1.0` tag for
-  text-to-speech.
-- `kiosk-core`, `kiosk-ui`, `queue-service`, `identity-service`,
-  `rag-service`, and `rtsp-streamer` have all been rebuilt and re-tagged to
-  `2026.2.0-rc2` for consistency across the deployment.
-
-## 2026.2.0-rc1
-
-This release expands Smart Kiosk Assistant with queue-aware ordering, a
-refreshed web experience, and a streamlined build workflow. This update
+This release delivers a unified Smart Kiosk Assistant stack with dual
+React-based UIs, OpenVINO-powered AI inference, agentic tool-calling
+ordering, queue-aware recommendations, enhanced voice interaction,
+optional multimodal identity, and streamlined deployment. This update
 includes the following changes:
 
 - The kiosk front end has been rebuilt as a React (Vite + TypeScript)
   single-page application, replacing the previous Gradio interface for a
   faster and more customizable web experience.
-- The ordering agent now runs its Qwen3-4B language model through OpenVINO
-  Model Server (OVMS) instead of an in-process OpenVINO model, providing a
-  dedicated, OpenAI-compatible inference endpoint for tool-calling.
-- A new queue analytics capability adds a person-counting service and an
+- A single `kiosk-ui` image now serves two runtime modes selected by
+  `KIOSK_UI_MODE`: an operator screen on port `7860` and a
+  customer-facing kiosk screen on port `7861`.
+- The operator screen provides voice and text chat, a live queue feed,
+  knowledge-base ingestion, audio device settings, and a performance
+  dashboard with executive KPIs, model KPIs, hardware charts, and
+  pipeline flow visualization.
+- The customer screen provides a queue-aware menu grid with a category
+  rail, a live cart panel with running order total and upsell prompts, a
+  queue-status bar, and a voice "Ask" bar.
+- The ordering agent now drives the cart through an MCP tool server
+  hosted by `kiosk-core`, with tools for catalogue browsing, cart
+  lifecycle management, order confirmation, and upsell suggestions.
+  Built-in guardrails resolve ambiguous item references and reject
+  implausible quantities.
+- A rule-based upsell engine produces contextual add-on suggestions that
+  are surfaced in both the cart and the spoken response.
+- The ordering agent runs its Qwen3-4B language model through OpenVINO
+  Model Server (OVMS) instead of an in-process OpenVINO model, providing
+  a dedicated, OpenAI-compatible inference endpoint for tool calling.
+- A queue analytics capability adds a person-counting service and an
   RTSP streamer, using YOLO detection with OpenVINO to track queue length
-  from a video feed and expose a live MJPEG overlay stream.
-- The ordering flow can now adapt to real-time queue conditions, surfacing a
-  dynamic peak-hour menu driven by the queue-service integration.
+  from a video feed, expose a live MJPEG overlay stream, and surface a
+  dynamic peak-hour menu.
+- The audio-analyzer service adds OpenAI-compatible streaming
+  transcription over Server-Sent Events, a realtime WebSocket
+  transcription endpoint, Video Summarization Service (VSS) response
+  compatibility, and more accurate multi-speaker segment splitting with
+  persisted enrolment.
 - Speaker diarization has been enabled across the audio-analyzer and
   kiosk-core pipeline, improving turn attribution during multi-speaker
   interactions.
+- The text-to-speech service now supports named voices and produces
+  faster, more natural-sounding prosody.
 - An optional multimodal identity service adds Face ID and voiceprint
-  authentication, combining OpenVINO face and ECAPA voice inference with a
-  FAISS index and SQLite loyalty profiles, enabled through a dedicated
+  authentication, combining OpenVINO face and ECAPA voice inference with
+  a FAISS index and SQLite loyalty profiles, with login, registration,
+  and enrolment screens in the UI, enabled through a dedicated
   deployment profile.
-- A Makefile-based workflow simplifies setup and operations with targets for
-  environment initialization, model download, sample-video retrieval, image
-  build, service startup, health checks, and cleanup.
-- Sample-video tooling downloads and provisions the RTSP feed clips used by
-  the queue analytics pipeline, configurable through the environment file.
-
-
+- Inference devices are configurable per service (`CPU`, `GPU`, `NPU`),
+  including NPU passthrough for `identity-service`, `ovms-llm`, and
+  audio-analyzer ASR, with independent device settings for the RAG
+  embedding and reranker models.
+- All kiosk services and container images have been rebuilt and aligned
+  to `2026.2.0`: `kiosk-core`, `kiosk-ui`, `queue-service`,
+  `identity-service`, `rag-service`, `rtsp-streamer`, `audio-analyzer`,
+  `text-to-speech`, and `metrics-collector`.
+- A Makefile-based workflow simplifies setup and operations with targets
+  for environment initialization, configuration validation, model and
+  sample-video download, image build, service startup, per-service health
+  checks, log tailing, single-service rebuilds, and cleanup.
+- Sample-video tooling downloads and provisions the RTSP feed clips used
+  by the queue analytics pipeline, configurable through the environment
+  file.
 
 ## 2026.1.0
 
