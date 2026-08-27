@@ -46,6 +46,16 @@ plain `git clone` of `edge-ai-libraries` also works if you do not mind
 the extra files. Only the build flow needs `edge-ai-libraries` on disk
 — the pull flow (see [Run With Docker Compose](./run-container.md)) does not.
 
+## Create the Environment File
+
+`.env` is not committed to the repo. `docker-compose.yml` reads
+`REGISTRY`/`RELEASE_TAG` from it and falls back to `latest` if it's
+missing, so create it before building:
+
+```bash
+make init-env        # copies .env.example → .env
+```
+
 ## Download the LLM Model for OVMS
 
 Before building or starting the stack, download the Qwen3-4B model that
@@ -71,8 +81,9 @@ HuggingFace Hub and updates `OVMS_MODEL_NAME`, `TARGET_DEVICE`, and
 The top-level [docker-compose.yml](https://github.com/intel-retail/voice-enabled-interactions/blob/main/smart-kiosk-assistant/docker-compose.yml)
 declares both `image:` and `build:` for each of the five services: `audio-analyzer`,
 `text-to-speech`, `rag-service`, `kiosk-core`, and `kiosk-ui`. Both
-`REGISTRY` and `RELEASE_TAG` are read from [.env](https://github.com/intel-retail/voice-enabled-interactions/blob/main/smart-kiosk-assistant/.env)
-(defaults: `REGISTRY=intel`, committed `RELEASE_TAG` pins the current release).
+`REGISTRY` and `RELEASE_TAG` are read from `.env` (created in
+[Create the Environment File](#create-the-environment-file) above;
+defaults: `REGISTRY=intel`, `RELEASE_TAG` pins the current release).
 
 `docker compose build` rebuilds each service from source and tags the
 result as the same `${REGISTRY}/<svc>:${RELEASE_TAG}` reference used by
@@ -126,16 +137,25 @@ The `kiosk-ui` container reuses the `kiosk-core` image and runs
 
 `kiosk-core` and `kiosk-ui` can run directly on the host while the three
 model-hosting services run in containers. Install host packages, then
-create a virtual environment and install dependencies:
+create a virtual environment and install dependencies.
+
+`kiosk-core` requires **Python 3.12** (matching the `python:3.12-slim` base
+image used by the Dockerfile). `openwakeword`'s declared `tflite-runtime`
+dependency has no wheels for Python 3.12+, but `kiosk-core` only uses
+openwakeword's ONNX inference path by default, so install `requirements.txt`
+first, then `openwakeword` itself with `--no-deps` in a separate pip
+invocation, exactly as the Dockerfile does:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y ffmpeg alsa-utils libsndfile1
+sudo apt-get install -y ffmpeg alsa-utils libsndfile1 libportaudio2
 
-python -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
+python --version   # should report Python 3.12.x
 pip install --upgrade pip
 pip install -r requirements.txt
+pip install --no-deps openwakeword==0.6.0
 ```
 
 See [Run On the Host](./run-standalone.md) for the launch commands.
