@@ -160,13 +160,17 @@ If `GPU` is configured and unavailable on the host, `make check-env` fails befor
 ## Audio Analyzer Diarization Device (`config.yaml`)
 
 > [!IMPORTANT]
-> **Diarization requires two gated HuggingFace models.** Before enabling it,
-> set `HF_TOKEN` in `.env` and accept the licence on **both** pages with the
-> same account that owns the token:
-> [`pyannote/speaker-diarization-3.1`](https://huggingface.co/pyannote/speaker-diarization-3.1)
+> **Diarization requires three gated HuggingFace models.** Before enabling it,
+> set `HF_TOKEN` in `.env` and accept the licence on **all three** pages with
+> the same account that owns the token:
+> [`pyannote/speaker-diarization-community-1`](https://huggingface.co/pyannote/speaker-diarization-community-1),
+> [`pyannote/speaker-diarization-3.1`](https://huggingface.co/pyannote/speaker-diarization-3.1),
 > and [`pyannote/segmentation-3.0`](https://huggingface.co/pyannote/segmentation-3.0).
-> The diarization pipeline pulls `segmentation-3.0` as a dependency, so
-> accepting only `speaker-diarization-3.1` still fails with a `401`. Set
+> The diarization pipeline pulls `segmentation-3.0` and
+> `speaker-diarization-community-1` in addition to the configured
+> `speaker-diarization-3.1`, so accepting only the configured model still
+> fails with a `401`. (`pyannote/wespeaker-voxceleb-resnet34-LM` is also
+> downloaded but is **not** gated — no licence acceptance needed.) Set
 > `KIOSK_CORE_DIARIZATION_ENABLED=false` to run without diarization.
 
 Diarization (`models.diarization.device`) is a **separate component from ASR**

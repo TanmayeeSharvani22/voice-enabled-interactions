@@ -217,10 +217,17 @@ is refusing the page because it's not a secure origin. Try either fix:
 
 ## Speaker Labels Are Missing / Diarization Fails to Download
 
-Speaker diarization pulls **two gated** Pyannote models from HuggingFace:
-`pyannote/speaker-diarization-3.1` and `pyannote/segmentation-3.0`. The
-second is a dependency of the pipeline, so accepting only the first still
-fails.
+Speaker diarization pulls **three gated** Pyannote models from HuggingFace:
+
+| Model | Gated | Why it is fetched |
+|---|---|---|
+| [`pyannote/speaker-diarization-3.1`](https://huggingface.co/pyannote/speaker-diarization-3.1) | Yes | Configured pipeline (`models.diarization.name`) |
+| [`pyannote/segmentation-3.0`](https://huggingface.co/pyannote/segmentation-3.0) | Yes | Segmentation dependency of the pipeline |
+| [`pyannote/speaker-diarization-community-1`](https://huggingface.co/pyannote/speaker-diarization-community-1) | Yes | Pulled by `pyannote.audio` during pipeline setup |
+| `pyannote/wespeaker-voxceleb-resnet34-LM` | No | Embedding dependency — no licence needed |
+
+All three gated repos must be accepted; accepting only the configured
+`speaker-diarization-3.1` still fails.
 
 Typical `audio-analyzer` log signature:
 
@@ -238,7 +245,8 @@ To fix:
    ```
 
 2. While signed in with the **same** HuggingFace account that owns the
-   token, accept the licence on both pages:
+   token, accept the licence on all three pages:
+   - https://huggingface.co/pyannote/speaker-diarization-community-1
    - https://huggingface.co/pyannote/speaker-diarization-3.1
    - https://huggingface.co/pyannote/segmentation-3.0
 

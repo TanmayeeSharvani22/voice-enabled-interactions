@@ -512,7 +512,8 @@ services:
       KIOSK_CORE_TTS_VOICE:    Ryan
       KIOSK_CORE_METRICS_URL:  http://metrics-collector:9000
       # Diarization — re-enable once HF terms are accepted for pyannote models.
-      # Accept terms at: https://huggingface.co/pyannote/speaker-diarization-3.1
+      # Accept terms at: https://huggingface.co/pyannote/speaker-diarization-community-1
+      #                  https://huggingface.co/pyannote/speaker-diarization-3.1
       #                  https://huggingface.co/pyannote/segmentation-3.0
       # Was hardcoded to "true" here, which silently ignored any
       # KIOSK_CORE_DIARIZATION_ENABLED=false set in the shell/.env — only

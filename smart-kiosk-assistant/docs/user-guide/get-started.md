@@ -29,9 +29,11 @@ session and product ordering, `kiosk-ui` is the React front end, and
 - Intel GPU drivers (recommended) — see the
   [Intel GPU driver guide](https://dgpu-docs.intel.com)
 - A [HuggingFace account and access token](https://huggingface.co/settings/tokens),
-  with the gated [`pyannote/speaker-diarization-3.1`](https://huggingface.co/pyannote/speaker-diarization-3.1)
-  and [`pyannote/segmentation-3.0`](https://huggingface.co/pyannote/segmentation-3.0)
-  licences accepted (both are required for speaker diarization)
+  with the three gated Pyannote licences accepted — required for speaker
+  diarization:
+  [`speaker-diarization-community-1`](https://huggingface.co/pyannote/speaker-diarization-community-1),
+  [`speaker-diarization-3.1`](https://huggingface.co/pyannote/speaker-diarization-3.1),
+  and [`segmentation-3.0`](https://huggingface.co/pyannote/segmentation-3.0)
 - At least 30 GB free disk space for models and Docker images
 
 > **Note:** First-time setup downloads the OVMS LLM model (~4 GB) plus the
@@ -93,11 +95,12 @@ https://huggingface.co/settings/tokens):
 HF_TOKEN=hf_your_token_here
 ```
 
-Speaker diarization uses two **gated** Pyannote models. While signed in to
+Speaker diarization uses three **gated** Pyannote models. While signed in to
 HuggingFace with the same account that owns the token, accept the licence on
-**both** model pages — accepting only the first one is not enough, and the
+**all three** model pages — accepting only some of them is not enough, and the
 `audio-analyzer` container will fail to download the pipeline:
 
+- https://huggingface.co/pyannote/speaker-diarization-community-1
 - https://huggingface.co/pyannote/speaker-diarization-3.1
 - https://huggingface.co/pyannote/segmentation-3.0
 
