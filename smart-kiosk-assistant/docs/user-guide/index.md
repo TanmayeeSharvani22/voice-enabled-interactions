@@ -27,7 +27,8 @@ inference runs locally on Intel CPU or GPU via OpenVINO.
 | `text-to-speech` | 8011 | Speech synthesis (SpeechT5 / Qwen-TTS)         |
 | `rag-service`    | 8020 | Knowledge-base retrieval and answer generation |
 | `kiosk-core`     | 8012 | FastAPI session orchestrator                   |
-| `kiosk-ui`       | 7860 | Gradio browser interface                       |
+| `kiosk-ui`       | 7860 | React browser interface — operator screen       |
+| `kiosk-ui-customer` | 7861 | React browser interface — customer screen   |
 
 `audio-analyzer`, `text-to-speech`, and `rag-service` host the inference
 models. `kiosk-core` and `kiosk-ui` are I/O-only.

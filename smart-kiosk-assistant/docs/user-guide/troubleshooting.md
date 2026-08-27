@@ -215,10 +215,64 @@ is refusing the page because it's not a secure origin. Try either fix:
   docker compose logs -f kiosk-ui
   ```
 
+## Speaker Labels Are Missing / Diarization Fails to Download
+
+Speaker diarization pulls **three gated** Pyannote models from HuggingFace:
+
+| Model | Gated | Why it is fetched |
+|---|---|---|
+| [`pyannote/speaker-diarization-3.1`](https://huggingface.co/pyannote/speaker-diarization-3.1) | Yes | Configured pipeline (`models.diarization.name`) |
+| [`pyannote/segmentation-3.0`](https://huggingface.co/pyannote/segmentation-3.0) | Yes | Segmentation dependency of the pipeline |
+| [`pyannote/speaker-diarization-community-1`](https://huggingface.co/pyannote/speaker-diarization-community-1) | Yes | Pulled by `pyannote.audio` during pipeline setup |
+| `pyannote/wespeaker-voxceleb-resnet34-LM` | No | Embedding dependency — no licence needed |
+
+All three gated repos must be accepted; accepting only the configured
+`speaker-diarization-3.1` still fails.
+
+Typical `audio-analyzer` log signature:
+
+```
+401 Client Error ... Cannot access gated repo for url
+https://huggingface.co/pyannote/segmentation-3.0/resolve/main/config.yaml
+```
+
+To fix:
+
+1. Confirm `HF_TOKEN` is set in `.env` and the container picked it up:
+
+   ```bash
+   docker compose exec audio-analyzer printenv HF_TOKEN
+   ```
+
+2. While signed in with the **same** HuggingFace account that owns the
+   token, accept the licence on all three pages:
+   - https://huggingface.co/pyannote/speaker-diarization-community-1
+   - https://huggingface.co/pyannote/speaker-diarization-3.1
+   - https://huggingface.co/pyannote/segmentation-3.0
+
+3. Recreate the service so it retries the download:
+
+   ```bash
+   docker compose up -d --force-recreate audio-analyzer
+   ```
+
+If you do not need per-speaker attribution, disable diarization instead —
+transcription continues to work normally:
+
+```bash
+# .env
+KIOSK_CORE_DIARIZATION_ENABLED=false
+```
+
+Note that a diarizer load failure is **non-fatal**: it is logged as a
+warning and diarization is disabled for that session, so `audio-analyzer`
+stays healthy and `/health` still passes even when speaker labels are
+missing. Always check the logs rather than the health endpoint.
+
 ## Answer Is Empty or Off-Topic
 
-- Confirm the knowledge base was ingested. The Gradio UI exposes an
-  ingestion panel; see also
+- Confirm the knowledge base was ingested. The operator UI exposes a
+  Knowledge Base panel; see also
   [rag-service/README.md](https://github.com/intel-retail/voice-enabled-interactions/blob/main/smart-kiosk-assistant/rag-service/README.md).
 - Check `rag-service` logs for retrieval scores and reranker output.
 - Try the same question from the API to rule out the UI:
@@ -259,4 +313,3 @@ you override these URLs for a host-run setup, confirm:
 
 - [Configuration](./get-started/configuration.md)
 - [Get Started](./get-started.md)
-- [Run On The Host](./get-started/run-standalone.md)
