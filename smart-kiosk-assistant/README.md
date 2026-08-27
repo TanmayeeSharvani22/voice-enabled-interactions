@@ -4,7 +4,7 @@ Smart Kiosk Assistant is a voice-first retrieval-augmented kiosk stack for retai
 
 ## What This Repository Contains
 
-- A browser-based Gradio kiosk UI with microphone capture and sequential audio playback.
+- A browser-based React (Vite + TypeScript) kiosk UI with microphone capture and sequential audio playback, served in either operator or customer mode.
 - A FastAPI kiosk orchestrator that coordinates speech-to-text, retrieval, and text-to-speech.
 - An internal RAG microservice with ingestion, vector storage, and streamed answers.
 - Pinned runtime configuration for upstream `audio-analyzer` and `text-to-speech` microservices.
@@ -68,7 +68,6 @@ To rebuild any service from source instead of pulling, see
 - Hardware and OS prerequisites: [System Requirements](./docs/user-guide/get-started/system-requirements.md)
 - Build details: [Build from Source](./docs/user-guide/get-started/build-from-source.md)
 - Container startup and verification: [Run Container](./docs/user-guide/get-started/run-container.md)
-- Host-run kiosk-core and Gradio UI: [Run Standalone](./docs/user-guide/get-started/run-standalone.md)
 - `kiosk-core` API: [API Reference](./docs/user-guide/api-reference.md)
 - Environment variables, model selection, and inference device: [Configuration](./docs/user-guide/get-started/configuration.md)
 - Troubleshooting: [Troubleshooting](./docs/user-guide/troubleshooting.md)
