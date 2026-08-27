@@ -159,6 +159,16 @@ If `GPU` is configured and unavailable on the host, `make check-env` fails befor
 
 ## Audio Analyzer Diarization Device (`config.yaml`)
 
+> [!IMPORTANT]
+> **Diarization requires two gated HuggingFace models.** Before enabling it,
+> set `HF_TOKEN` in `.env` and accept the licence on **both** pages with the
+> same account that owns the token:
+> [`pyannote/speaker-diarization-3.1`](https://huggingface.co/pyannote/speaker-diarization-3.1)
+> and [`pyannote/segmentation-3.0`](https://huggingface.co/pyannote/segmentation-3.0).
+> The diarization pipeline pulls `segmentation-3.0` as a dependency, so
+> accepting only `speaker-diarization-3.1` still fails with a `401`. Set
+> `KIOSK_CORE_DIARIZATION_ENABLED=false` to run without diarization.
+
 Diarization (`models.diarization.device`) is a **separate component from ASR**
 (see [ASR Support Matrix](#asr-support-matrix) above) with its own,
 more limited device support. Do not assume ASR's `CPU`/`GPU`/`NPU` support
@@ -346,21 +356,13 @@ kiosk-core has no config file. All settings are controlled through environment v
 | `KIOSK_CORE_PREROLL_SECONDS` | `0.3` | Audio buffered before speech starts |
 | `KIOSK_CORE_HTTP_TIMEOUT_SECONDS` | `120.0` | HTTP client timeout for downstream calls |
 
-### Gradio UI (`gradio_app.py`)
-
-| Variable | Default | Description |
-|---|---|---|
-| `KIOSK_CORE_UI_BASE_URL` | `http://127.0.0.1:8012` | Base URL of the kiosk-core API |
-| `KIOSK_CORE_UI_ANALYZER_URL` | `http://127.0.0.1:8010/v1/audio/transcriptions` | Passed to start-file sessions as `analyzer_url` |
-| `KIOSK_CORE_UI_RAG_URL` | `http://127.0.0.1:8020/api/v1/query` | Passed to start-file sessions as `rag_url` |
-| `KIOSK_CORE_UI_TTS_URL` | `http://127.0.0.1:8011/v1/audio/speech` | Passed to start-file sessions as `tts_url` |
-| `KIOSK_CORE_UI_TIMEOUT_SECONDS` | `120.0` | HTTP client timeout in the UI |
-| `KIOSK_CORE_UI_POLL_INTERVAL_SECONDS` | `0.35` | How often the UI polls for session state updates |
-
 ### Kiosk UI runtime mode {#kiosk_ui_mode}
 
 The React kiosk UI (`kiosk-ui/`) ships as a single image that can serve
-either of two screens, selected at container start — no rebuild:
+either of two screens, selected at container start — no rebuild.
+`KIOSK_UI_MODE` is the only variable the UI container reads; the browser
+reaches `kiosk-core` and the other services through the nginx reverse
+proxy baked into the image:
 
 | Variable | Default | Description |
 |---|---|---|
@@ -381,7 +383,6 @@ When running with the top-level [docker-compose.yml](https://github.com/intel-re
 - `KIOSK_CORE_ANALYZER_URL=http://audio-analyzer:8010/v1/audio/transcriptions`
 - `KIOSK_CORE_RAG_URL=http://rag-service:8020/api/v1/query`
 - `KIOSK_CORE_TTS_URL=http://text-to-speech:8011/v1/audio/speech`
-- `KIOSK_CORE_UI_BASE_URL=http://kiosk-core:8012`
 
 Most deployments should leave these values unchanged. Override them only when `kiosk-core` or `kiosk-ui` must call services outside the local Compose stack.
 
