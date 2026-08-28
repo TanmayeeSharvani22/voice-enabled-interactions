@@ -30,7 +30,7 @@ so the two repositories must sit side by side:
 From whatever parent directory you keep source in:
 
 ```bash
-git clone https://github.com/intel-retail/voice-enabled-interactions.git
+git clone -b <release-or-tag> --single-branch https://github.com/intel-retail/voice-enabled-interactions.git  #e.g. v4.0.0
 cd voice-enabled-interactions/
 git clone --depth 1 --filter=blob:none --sparse \
   https://github.com/open-edge-platform/edge-ai-libraries.git
