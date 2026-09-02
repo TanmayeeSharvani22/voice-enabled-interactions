@@ -160,9 +160,9 @@ endpoint swallows the error and surfaces the canned reply.
 > `{"DEVICE_PROPERTIES":{"NPU":{"MAX_PROMPT_LEN":8192}}}` it is accepted at load
 > time — the servable still reports `AVAILABLE` — but is **silently ignored**,
 > leaving the 1024 default in force. Verified on MTL with Qwen3-4B: the nested
-> form rejects an 1,824-token prompt, the top-level form serves 3,624.
-> `setup_models.sh` now emits the same graph OVMS itself generates for
-> `ovms --configure --target_device NPU --max_prompt_len N`.
+> form rejects a 1,824-token prompt, the top-level form serves 3,624. This is
+> recorded only so the next person does not lose a day to it — raising the cap
+> makes NPU *work*, not *usable*, for the reasons in the table above.
 
 **Recommended fix — use GPU (or CPU).** NPU is **not supported** for the served
 LLM. `setup_models.sh --device NPU` now refuses to run for this reason:

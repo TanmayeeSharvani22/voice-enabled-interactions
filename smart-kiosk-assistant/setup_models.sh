@@ -25,7 +25,10 @@
 #   ./setup_models.sh [OPTIONS]
 #
 # Options:
-#   --device  CPU|GPU|NPU   Target inference device for OVMS  (default: GPU)
+#   --device  CPU|GPU       Target inference device for OVMS  (default: GPU)
+#                           NPU is not supported for the OVMS-served LLM; use
+#                           --device NPU --skip-ovms to target the NPU with the
+#                           other services (see ITEP-96031).
 #   --int4                  Use INT4 model instead of INT8 (smaller, less accurate)
 #   --skip-ovms             Skip the OVMS LLM model download
 #   --skip-queue            Skip the YOLO26 queue-service model download/export
@@ -36,6 +39,7 @@
 # Examples:
 #   ./setup_models.sh                        # GPU (default, INT8) + YOLO26
 #   ./setup_models.sh --device CPU           # CPU-only systems
+#   ./setup_models.sh --device NPU --skip-ovms   # NPU for queue/identity/ASR only
 #   ./setup_models.sh --int4                 # INT4 (smaller, faster, less accurate)
 #   ./setup_models.sh --skip-queue           # LLM only, skip queue-service model
 #   ./setup_models.sh --identity             # LLM + identity (face detect/reid + ECAPA voice)
