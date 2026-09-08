@@ -37,7 +37,12 @@ import pydantic.root_model  # noqa: F401
 # module and raise "ImportError: cannot import name 'claw_state'". Importing
 # fastmcp once, up front, ensures the hook is fully installed before any
 # module eviction/reimport cycles begin.
-import fastmcp  # noqa: F401
+try:
+    import fastmcp  # noqa: F401
+except ModuleNotFoundError:  # pragma: no cover
+    # Some environments (e.g. Docker-focused CI jobs) don't install app deps on the runner.
+    # Only pre-import fastmcp when it's available.
+    pass
 
 import pytest
 
