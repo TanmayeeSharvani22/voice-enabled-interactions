@@ -27,6 +27,18 @@ from unittest.mock import MagicMock, patch
 # submodel of RootModel (e.g. mcp.types.JSONRPCMessage).
 import pydantic.root_model  # noqa: F401
 
+# Pre-import fastmcp for the same reason. fastmcp>=3.2.0 (CVE-2026-32871 /
+# GHSA-vv7q-7jx5-f767 fix) pulls in py-key-value-aio, which installs a
+# beartype.claw import hook (a sys.meta_path finder) the first time fastmcp
+# is imported. The kiosk-core fixture below repeatedly deletes and
+# re-imports kiosk_core/main between tests; if fastmcp's first import
+# happens to occur *during* one of those reimport cycles, the beartype
+# import hook can observe a partially-initialised `beartype.claw._clawstate`
+# module and raise "ImportError: cannot import name 'claw_state'". Importing
+# fastmcp once, up front, ensures the hook is fully installed before any
+# module eviction/reimport cycles begin.
+import fastmcp  # noqa: F401
+
 import pytest
 
 _CSV_PATH = Path(__file__).resolve().parent / "test_results.csv"
