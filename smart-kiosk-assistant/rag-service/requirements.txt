@@ -21,7 +21,7 @@ fsspec>=2023.1.0,<=2025.3.0
 
 numpy==1.26.4
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.8.0+cpu
+torch==2.13.0+cpu
 transformers==5.5.0
 tokenizers==0.22.2
 safetensors==0.6.2
