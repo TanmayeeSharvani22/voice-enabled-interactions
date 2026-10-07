@@ -18,7 +18,7 @@
 # does plain string substitution with no notion of booleans, so if `image:`
 # read ${REGISTRY:-intel} directly, a shipped `.env` with REGISTRY=true would
 # resolve to the literal, non-existent "true/<service>" registry and every
-# pull would fail with "access denied" — this bit raw `docker compose
+# pull would fail with "access denied" — this hit raw `docker compose
 # pull/up` users who don't go through `make`. Set REGISTRY_REPO in .env only
 # if you publish to a different registry/namespace.
 

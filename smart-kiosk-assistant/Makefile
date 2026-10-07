@@ -51,7 +51,7 @@ REGISTRY         ?= false
 # .env's REGISTRY_REPO (default: intel). Passing any other value for
 # REGISTRY (e.g. a private registry host) is treated as an explicit registry
 # override and takes precedence over REGISTRY_REPO.
-_ENV_REGISTRY    ?= intel
+_ENV_REGISTRY    ?= $(if $(strip $(REGISTRY_REPO)),$(strip $(REGISTRY_REPO)),intel)
 _DOCKER_REGISTRY  = $(if $(filter false FALSE true TRUE,$(REGISTRY)),$(_ENV_REGISTRY),$(REGISTRY))
 
 RELEASE_TAG      ?= 2026.1.0
