@@ -1392,8 +1392,11 @@ class BaseAudioSession:
                 # the turn used to wait out the full silence_timeout_seconds
                 # even when the correct transcript ("Please add one chocolate
                 # brownie to my order.") had already landed well before it. A
-                # commit that landed after the last speech frame is final, so
-                # it needs no stability window.
+                # commit SENT after the last speech frame holds every word up
+                # to it and will not change, so it needs no stability window.
+                # Its landing time is no guide: under slow ASR a commit sent
+                # mid-utterance can land after the last word. See
+                # RealtimeAnalyzerClient.committed_text_since().
                 _committed_final = False
                 if self._streaming_active:
                     _preview_text = self.realtime_client.latest_preview_text()
