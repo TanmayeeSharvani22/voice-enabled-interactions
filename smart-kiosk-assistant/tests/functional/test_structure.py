@@ -309,3 +309,85 @@ class TestProxyConfiguration:
             "docker-compose.proxy.yml should no longer exist - proxy "
             "passthrough is declared inline in docker-compose.yml"
         )
+
+    @pytest.mark.tier1
+    def test_legacy_kiosk_proxy_variables_are_translated_not_ignored(self):
+        """Deployments still using the removed file's variable names must work.
+
+        ``docker-compose.proxy.yml`` read ``KIOSK_HTTP_PROXY`` /
+        ``KIOSK_HTTPS_PROXY``. A .env carrying only those would otherwise lose
+        egress silently once the file was deleted, and stall on the first
+        model download - the exact failure this change exists to prevent.
+        """
+        makefile = (_KIOSK_ROOT / "Makefile").read_text()
+
+        assert "KIOSK_HTTP_PROXY" in makefile and "KIOSK_HTTPS_PROXY" in makefile, (
+            "the Makefile must still recognise the legacy KIOSK_HTTP_PROXY / "
+            "KIOSK_HTTPS_PROXY names rather than silently ignoring them"
+        )
+        assert "deprecated" in makefile, (
+            "translating the legacy names must emit a deprecation warning so "
+            "they can eventually be removed"
+        )
+
+    @pytest.mark.tier1
+    def test_check_env_detects_exported_and_commented_empty_proxy_lines(self):
+        """`HTTP_PROXY=` in .env reintroduces ITEP-97604; all forms must be caught.
+
+        Compose accepts ``export HTTP_PROXY=`` as an empty value, and does NOT
+        strip a trailing comment - ``HTTP_PROXY= # optional`` becomes the
+        literal string ``# optional``. Both are broken configurations that the
+        original regex, anchored directly after ``=``, let through.
+        """
+        import re
+        import subprocess
+
+        makefile = (_KIOSK_ROOT / "Makefile").read_text()
+        match = re.search(
+            r"grep -qE '(\^\[\[:space:\]\]\*\(export.*?)' \.env", makefile
+        )
+        assert match, "check-env must grep .env for unusable proxy assignments"
+        pattern = match.group(1).replace("$$", "$")
+
+        flagged = ("HTTP_PROXY=", "export HTTPS_PROXY=", "  http_proxy=  ",
+                   "HTTP_PROXY= # optional", "export https_proxy=  # note")
+        allowed = ("#HTTP_PROXY=", "# HTTP_PROXY=http://p:912",
+                   "HTTP_PROXY=http://p:912")
+
+        for line in flagged + allowed:
+            hit = subprocess.run(
+                ["grep", "-qE", pattern], input=line, text=True
+            ).returncode == 0
+            assert hit is (line in flagged), (
+                f"check-env proxy regex misclassified {line!r} "
+                f"(expected {'flagged' if line in flagged else 'allowed'})"
+            )
+
+    @pytest.mark.tier1
+    def test_resolver_never_blocks_on_an_unverified_verdict(self):
+        """Refusing to start is only justified when the verdict is established.
+
+        With no local image to probe with, neither container egress nor the
+        caches can be inspected: a host ``curl`` says nothing about what a
+        container reaches through Docker's ``proxies.default``. Blocking there
+        would break startups that would have worked.
+        """
+        resolver = (_KIOSK_ROOT / "scripts" / "resolve-hf-offline.sh").read_text()
+
+        assert "probe_inconclusive" in resolver, (
+            "the resolver must track whether its verdict was actually "
+            "established before it is allowed to block startup"
+        )
+        assert "curl -fsS" in resolver, (
+            "the host fallback must use curl --fail; without it an HTTP 403 "
+            "from a filtering proxy exits 0 and is misread as working egress"
+        )
+        assert "nc -z" not in resolver, (
+            "a raw TCP connect to :443 is not proof of Hub access and must "
+            "not count as a successful probe"
+        )
+        assert "-size +1024k" in resolver and "*.incomplete" in resolver, (
+            "the cache check must require real weight files, so an empty "
+            "models--*/ directory or an interrupted download is not counted "
+            "as a warm cache"
+        )

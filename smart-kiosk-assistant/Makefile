@@ -150,6 +150,33 @@ ifneq (,$(filter true,$(strip $(PROXY))))
 $(info [proxy] PROXY=true is no longer needed: docker-compose.yml now passes HTTP_PROXY/HTTPS_PROXY through from your shell or .env automatically.)
 endif
 
+# Deprecated KIOSK_HTTP_PROXY / KIOSK_HTTPS_PROXY (the names the removed
+# docker-compose.proxy.yml read) are translated rather than ignored. A .env
+# carrying only those would otherwise lose egress silently -- the stack would
+# start with no proxy and stall on the first model download, which is exactly
+# the failure this whole change exists to prevent.
+#
+# Translate only into an UNSET counterpart so a host that has since moved to
+# the standard names is never overridden by a stale KIOSK_ value.
+ifneq (,$(strip $(KIOSK_HTTP_PROXY))$(strip $(KIOSK_HTTPS_PROXY)))
+$(warning [proxy] KIOSK_HTTP_PROXY/KIOSK_HTTPS_PROXY are deprecated. Rename them to HTTP_PROXY/HTTPS_PROXY in .env; they are being applied for now but support will be removed.)
+ifneq (,$(strip $(KIOSK_HTTP_PROXY)))
+ifeq (,$(strip $(HTTP_PROXY)))
+export HTTP_PROXY := $(strip $(KIOSK_HTTP_PROXY))
+endif
+endif
+ifneq (,$(strip $(KIOSK_HTTPS_PROXY)))
+ifeq (,$(strip $(HTTPS_PROXY)))
+export HTTPS_PROXY := $(strip $(KIOSK_HTTPS_PROXY))
+endif
+else
+# docker-compose.proxy.yml defaulted HTTPS to the HTTP value; preserve that.
+ifeq (,$(strip $(HTTPS_PROXY)))
+export HTTPS_PROXY := $(strip $(KIOSK_HTTP_PROXY))
+endif
+endif
+endif
+
 # Mirror each proxy variable across letter cases.
 #
 # Compose passes through exactly the names that are set, so setting only
@@ -181,6 +208,22 @@ $(warning [proxy] $(2)=$(1) is loopback: inside a container that is the containe
 endef
 $(eval $(call _warn_if_loopback,$(strip $(http_proxy)),http_proxy))
 $(eval $(call _warn_if_loopback,$(strip $(https_proxy)),https_proxy))
+
+# Both letter cases set to DIFFERENT values for the same protocol. The mirror
+# above never creates this -- it only fills a missing counterpart -- so it can
+# only come from the caller: typically an uppercase project proxy in .env plus
+# a different ambient lowercase one inherited from the shell.
+#
+# Compose passes both through verbatim, and the consumers disagree about which
+# wins: Python (urllib/requests/httpx), curl and wget all prefer the LOWER-case
+# name. Silently preferring one is how a reachable project proxy ends up
+# unused, so say which one actually takes effect.
+define _warn_if_case_conflict
+$(if $(and $(strip $(1)),$(strip $(2))),$(if $(filter-out $(strip $(1)),$(strip $(2))),\
+$(warning [proxy] $(3)=$(strip $(1)) and $(4)=$(strip $(2)) disagree. Python, curl and wget all use the lower-case value ($(strip $(1))); the upper-case one is ignored by them. Set both to the same value, or unset one.)))
+endef
+$(eval $(call _warn_if_case_conflict,$(http_proxy),$(HTTP_PROXY),http_proxy,HTTP_PROXY))
+$(eval $(call _warn_if_case_conflict,$(https_proxy),$(HTTPS_PROXY),https_proxy,HTTPS_PROXY))
 
 # When huggingface.co is unreachable, `make up` switches to offline mode if the
 # model caches can serve the run, and refuses to start if they cannot (rather
@@ -505,13 +548,17 @@ check-env: ## Validate .env and all required variables before running the stack
 		fi; \
 	fi; \
 	\
-	if [ -f .env ] && grep -qE '^[[:space:]]*(HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy)[[:space:]]*=[[:space:]]*$$' .env; then \
-		echo "  $(RED)✗ .env contains an empty proxy assignment$(NC)"; \
-		grep -nE '^[[:space:]]*(HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy)[[:space:]]*=[[:space:]]*$$' .env | sed 's/^/      line /'; \
+	if [ -f .env ] && grep -qE '^[[:space:]]*(export[[:space:]]+)?(HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy)[[:space:]]*=[[:space:]]*(#.*)?$$' .env; then \
+		echo "  $(RED)✗ .env has a proxy assignment with no usable value$(NC)"; \
+		grep -nE '^[[:space:]]*(export[[:space:]]+)?(HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy)[[:space:]]*=[[:space:]]*(#.*)?$$' .env | sed 's/^/      line /'; \
 		echo "    An empty value is NOT the same as unset: Compose injects the empty"; \
 		echo "    string into the container, which suppresses the proxy Docker would"; \
 		echo "    otherwise take from ~/.docker/config.json and breaks model downloads"; \
-		echo "    (ITEP-97604). Comment the line out, or give it a real value."; \
+		echo "    (ITEP-97604). It suppresses BOTH letter cases, not just the one written."; \
+		echo "    'export VAR=' is parsed the same way."; \
+		echo "    A trailing comment is worse: Compose does NOT strip it, so"; \
+		echo "    'HTTP_PROXY= # optional' sets the proxy to the literal '# optional'."; \
+		echo "    Comment the line out, or give it a real value."; \
 		ERRORS=$$((ERRORS+1)); \
 	fi; \
 	\

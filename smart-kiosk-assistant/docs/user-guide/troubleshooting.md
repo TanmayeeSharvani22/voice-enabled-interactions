@@ -102,7 +102,23 @@ inside their containers on first run, which is why `HF_HUB_OFFLINE=0`
 
   `make` mirrors each proxy variable across letter cases, so setting only
   `HTTP_PROXY` is enough: `curl`, `wget` and `apt-get` read only the
-  lower-case names and would otherwise ignore it.
+  lower-case names and would otherwise ignore it. Mirroring only ever fills a
+  *missing* counterpart. If you set both cases to different values, `make`
+  warns and tells you which one actually takes effect — the lower-case one,
+  for Python, `curl` and `wget` alike.
+
+  > **Deprecated:** `KIOSK_HTTP_PROXY` / `KIOSK_HTTPS_PROXY` (read by the
+  > removed `docker-compose.proxy.yml`, together with `make up PROXY=true`)
+  > are still applied, with a warning, if the standard names are unset.
+  > Rename them to `HTTP_PROXY` / `HTTPS_PROXY`; `PROXY=true` is now a no-op.
+
+  Never write `HTTP_PROXY=` with an empty value in `.env`. Empty is *not* the
+  same as unset: Compose injects the empty string, which suppresses the proxy
+  Docker would otherwise take from `~/.docker/config.json` — for **both**
+  letter cases. `export HTTP_PROXY=` behaves identically, and
+  `HTTP_PROXY= # optional` is worse still, because Compose does not strip the
+  comment and sets the proxy to the literal string `# optional`.
+  `make check-env` fails on all three.
 
 - **No egress and no proxy at all.** `make up` no longer starts a run that
   cannot succeed. It probes huggingface.co from a container first and then
@@ -111,13 +127,21 @@ inside their containers on first run, which is why `HF_HUB_OFFLINE=0`
   | Probe | Caches | Result |
   |---|---|---|
   | reachable | — | starts online (unchanged) |
-  | unreachable | all 3 populated | starts with `HF_HUB_OFFLINE=1` automatically |
-  | unreachable | cold | refuses to start, prints the probe result and the fix |
+  | unreachable | all 3 hold real weight files | starts with `HF_HUB_OFFLINE=1` automatically |
+  | unreachable | cold or incomplete | refuses to start, prints the probe result and the fix |
+  | not determinable | — | warns and continues (never blocks) |
 
   Previously the stack came up and stalled for the full 600s dependency
   timeout. The probe reports *why* it failed — a proxy returning `403`
   (huggingface.co blocked by policy) is reported differently from no route at
-  all. `HF_HUB_OFFLINE=1` is always honoured and never overridden; set
+  all. A cache counts only if it contains an actual weight file over 1 MiB;
+  an empty `models--*/` directory or an interrupted download does not.
+
+  The probe runs in a container because a host `curl` says nothing about what
+  a container reaches through Docker's `proxies.default`. If no local image is
+  available to probe with, the result is treated as **inconclusive** and
+  startup proceeds with a warning rather than being blocked on an unverified
+  verdict. `HF_HUB_OFFLINE=1` is always honoured and never overridden; set
   `HF_AUTO_OFFLINE=false` to restore the old warn-and-continue behaviour.
 
   Intra-cluster traffic always bypasses the proxy via the shared `NO_PROXY`

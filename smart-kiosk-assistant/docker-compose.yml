@@ -65,6 +65,14 @@ x-no-proxy: &no-proxy "localhost,127.0.0.1,ovms-llm,kiosk-core,audio-analyzer,te
 # Both letter cases are listed because Python (httpx / requests /
 # huggingface_hub) reads the lower-case names while curl and apt accept
 # either, and Docker's config.json injection is itself per-variable.
+#
+# The four keys are deliberately independent here rather than normalised to a
+# single value. Compose has no conditional: any attempt to derive one case
+# from the other (`http_proxy: ${http_proxy:-${HTTP_PROXY}}`) reintroduces the
+# empty-value clobbering above whenever both are unset. Normalisation is done
+# one layer up instead, in the Makefile, which CAN distinguish unset from
+# empty: it mirrors a value into a missing counterpart and warns when the two
+# cases are set to conflicting values (lower-case is what actually wins).
 x-egress-proxy: &egress-proxy
   HTTP_PROXY:
   http_proxy:
