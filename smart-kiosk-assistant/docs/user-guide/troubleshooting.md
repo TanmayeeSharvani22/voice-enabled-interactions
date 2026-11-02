@@ -94,6 +94,32 @@ inside their containers on first run, which is why `HF_HUB_OFFLINE=0`
   (`127.0.0.1`/`localhost`) is the container itself, not your host, and
   downloads will hang; `make` warns if it detects one.
 
+  The same values are passed as **build args** to every locally built
+  service, so `make build REGISTRY=false` can reach the package mirrors —
+  `apt-get`/`pip`/`npm` run inside the builder, where the service-level
+  environment does not apply. `HTTP_PROXY`/`HTTPS_PROXY` are predefined build
+  args, so they need no `ARG` line and are not baked into the image.
+
+  `make` mirrors each proxy variable across letter cases, so setting only
+  `HTTP_PROXY` is enough: `curl`, `wget` and `apt-get` read only the
+  lower-case names and would otherwise ignore it.
+
+- **No egress and no proxy at all.** `make up` no longer starts a run that
+  cannot succeed. It probes huggingface.co from a container first and then
+  either switches to offline mode or stops:
+
+  | Probe | Caches | Result |
+  |---|---|---|
+  | reachable | — | starts online (unchanged) |
+  | unreachable | all 3 populated | starts with `HF_HUB_OFFLINE=1` automatically |
+  | unreachable | cold | refuses to start, prints the probe result and the fix |
+
+  Previously the stack came up and stalled for the full 600s dependency
+  timeout. The probe reports *why* it failed — a proxy returning `403`
+  (huggingface.co blocked by policy) is reported differently from no route at
+  all. `HF_HUB_OFFLINE=1` is always honoured and never overridden; set
+  `HF_AUTO_OFFLINE=false` to restore the old warn-and-continue behaviour.
+
   Intra-cluster traffic always bypasses the proxy via the shared `NO_PROXY`
   anchor in `docker-compose.yml`.
 

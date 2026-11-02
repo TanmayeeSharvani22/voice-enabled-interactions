@@ -250,6 +250,54 @@ class TestProxyConfiguration:
         )
 
     @pytest.mark.tier1
+    def test_locally_built_services_pass_proxy_as_build_args(self):
+        """apt-get/pip/npm run in the builder, not the final container.
+
+        The service-level ``environment`` block does not apply at build time,
+        so without ``build.args`` a proxied host gets an apt-get timeout during
+        ``make build REGISTRY=false``. HTTP_PROXY/HTTPS_PROXY are predefined
+        build args, so no ARG declaration is needed in the Dockerfile and they
+        are not baked into the image.
+        """
+        compose = self._load_compose()
+
+        missing = []
+        for name, service in compose.get("services", {}).items():
+            build = service.get("build")
+            if not isinstance(build, dict):
+                continue
+            args = build.get("args") or {}
+            for key in self._PROXY_KEYS:
+                if key not in args:
+                    missing.append(f"{name}.build.args.{key}")
+                elif args[key] is not None:
+                    missing.append(
+                        f"{name}.build.args.{key}={args[key]!r} (must be value-less)"
+                    )
+
+        assert not missing, (
+            "Every locally built service must pass the proxy through as build "
+            f"args, declared value-less. Missing/invalid: {missing}"
+        )
+
+    @pytest.mark.tier1
+    def test_hf_offline_resolver_exists_and_is_executable(self):
+        """`make up` depends on this script to avoid a 600s stall with no egress."""
+        import os
+
+        path = _KIOSK_ROOT / "scripts" / "resolve-hf-offline.sh"
+        assert path.is_file(), "scripts/resolve-hf-offline.sh not found"
+        assert os.access(path, os.X_OK), (
+            "scripts/resolve-hf-offline.sh must be executable; `make up` runs it directly"
+        )
+
+        makefile = (_KIOSK_ROOT / "Makefile").read_text()
+        up_body = makefile.split("\nup:", 1)[1].split("\ndown:", 1)[0]
+        assert "resolve-hf-offline.sh" in up_body, (
+            "the `up` target must resolve HF offline mode before starting the stack"
+        )
+
+    @pytest.mark.tier1
     def test_proxy_override_file_is_gone(self):
         """The opt-in override file was folded back into docker-compose.yml.
 

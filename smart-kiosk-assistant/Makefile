@@ -150,13 +150,43 @@ ifneq (,$(filter true,$(strip $(PROXY))))
 $(info [proxy] PROXY=true is no longer needed: docker-compose.yml now passes HTTP_PROXY/HTTPS_PROXY through from your shell or .env automatically.)
 endif
 
+# Mirror each proxy variable across letter cases.
+#
+# Compose passes through exactly the names that are set, so setting only
+# HTTP_PROXY (the common case in .env) leaves http_proxy unset in the
+# container. Python's urllib/requests/httpx accept either, but curl, wget and
+# apt-get inside the containers and during image builds read ONLY the
+# lower-case names -- so an upper-case-only proxy silently fails to apply to
+# exactly the tools that fetch packages.
+#
+# `-include .env` + `export` above means these already carry any .env value.
+# Only ever fill in a MISSING counterpart; never overwrite one the caller set,
+# so an intentionally asymmetric configuration survives.
+_PROXY_PAIRS = http_proxy/HTTP_PROXY https_proxy/HTTPS_PROXY no_proxy/NO_PROXY
+$(foreach _p,$(_PROXY_PAIRS), \
+  $(eval _lc = $(word 1,$(subst /, ,$(_p)))) \
+  $(eval _uc = $(word 2,$(subst /, ,$(_p)))) \
+  $(if $(strip $($(_lc))),,$(if $(strip $($(_uc))),$(eval export $(_lc) := $($(_uc))))) \
+  $(if $(strip $($(_uc))),,$(if $(strip $($(_lc))),$(eval export $(_uc) := $($(_lc))))) \
+)
+
 # A loopback proxy is the single most common misconfiguration here: inside a
 # container 127.0.0.1 is the container itself, not this host, so every model
-# download hangs with no stated cause. Warn once, at parse time.
-_HTTP_PROXY_VALUE = $(strip $(or $(http_proxy),$(HTTP_PROXY)))
-ifneq (,$(or $(findstring 127.0.0.1,$(_HTTP_PROXY_VALUE)),$(findstring localhost,$(_HTTP_PROXY_VALUE))))
-$(warning [proxy] $(_HTTP_PROXY_VALUE) is loopback: inside a container that is the container itself, not this host. Model downloads will hang. Set HTTP_PROXY to an address routable from containers.)
-endif
+# download and every apt-get hangs with no stated cause. Check BOTH the HTTP
+# and HTTPS proxies -- huggingface.co is HTTPS, so a loopback HTTPS_PROXY on
+# its own is enough to stall startup.
+define _warn_if_loopback
+$(if $(or $(findstring 127.0.0.1,$(1)),$(findstring localhost,$(1)),$(findstring ::1,$(1))),\
+$(warning [proxy] $(2)=$(1) is loopback: inside a container that is the container itself, not this host. Model downloads and apt-get will hang. Set it to an address routable from containers.))
+endef
+$(eval $(call _warn_if_loopback,$(strip $(http_proxy)),http_proxy))
+$(eval $(call _warn_if_loopback,$(strip $(https_proxy)),https_proxy))
+
+# When huggingface.co is unreachable, `make up` switches to offline mode if the
+# model caches can serve the run, and refuses to start if they cannot (rather
+# than stalling for the full 600s dependency timeout). Set to false to restore
+# the previous warn-and-continue behaviour. See scripts/resolve-hf-offline.sh.
+HF_AUTO_OFFLINE ?= true
 
 # Services with fully local build contexts (built from source in this repo).
 # metrics-collector is NOT in this list: its source now lives in the
@@ -634,7 +664,17 @@ build: check-env ## Pull images (default with .env); REGISTRY=false builds local
 
 up: check-env setup-dirs clean-metrics ## Start all services
 	@echo "$(BLUE)Starting Smart Kiosk Assistant...$(NC)"
-	REGISTRY_REPO=$(_DOCKER_REGISTRY) $(COMPOSE_BASE) $(_IDENTITY_PROFILE) $(_QUEUE_PROFILE) up -d
+	@# Resolve HF offline mode before bringing anything up. Without egress and
+	@# without a warm cache, audio-analyzer/text-to-speech can never become
+	@# healthy and the whole stack aborts after the 600s dependency timeout --
+	@# so fail fast instead, or switch to offline automatically when the cache
+	@# can actually serve the run. See scripts/resolve-hf-offline.sh.
+	@set -e; \
+	HF_RESOLVED=$$(COMPOSE_PROJECT="$(_COMPOSE_PROJECT)" HF_AUTO_OFFLINE="$(HF_AUTO_OFFLINE)" \
+		./scripts/resolve-hf-offline.sh); \
+	REGISTRY_REPO=$(_DOCKER_REGISTRY) \
+	HF_HUB_OFFLINE="$$HF_RESOLVED" TRANSFORMERS_OFFLINE="$$HF_RESOLVED" \
+		$(COMPOSE_BASE) $(_IDENTITY_PROFILE) $(_QUEUE_PROFILE) up -d
 	@echo ""
 	@echo "$(GREEN)✓ Stack started$(NC)"
 	@echo "  Kiosk UI        → http://localhost:7860"
@@ -1248,3 +1288,4 @@ compare-profiles: ## Build results/matrix_summary.csv from every profile's resul
 	@python3 tests/benchmarks/compare_profiles.py \
 		--results-root $(RESULTS_ROOT) \
 		--output $(RESULTS_ROOT)/matrix_summary.csv
+

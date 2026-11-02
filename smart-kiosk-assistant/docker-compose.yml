@@ -86,6 +86,13 @@ services:
     build:
       context: ./rtsp-streamer
       dockerfile: Dockerfile
+      # Proxy must reach the BUILD too: apt-get/pip/npm run inside the
+      # builder, not the final container, so the service-level
+      # environment block does not apply. HTTP_PROXY/HTTPS_PROXY are
+      # predefined build args -- no ARG declaration is needed in the
+      # Dockerfile and they are not baked into the image.
+      args:
+        <<: *egress-proxy
     image: ${REGISTRY_REPO:-intel}/rtsp-streamer:${RELEASE_TAG:-latest}
     container_name: rtsp-streamer
     # Gated behind the `queue` compose profile (container-layer flag), same
@@ -155,6 +162,13 @@ services:
     build:
       context: ./queue-service
       dockerfile: docker/Dockerfile
+      # Proxy must reach the BUILD too: apt-get/pip/npm run inside the
+      # builder, not the final container, so the service-level
+      # environment block does not apply. HTTP_PROXY/HTTPS_PROXY are
+      # predefined build args -- no ARG declaration is needed in the
+      # Dockerfile and they are not baked into the image.
+      args:
+        <<: *egress-proxy
     image: ${REGISTRY_REPO:-intel}/queue-service:${RELEASE_TAG:-latest}
     container_name: queue-service
     # Gated behind the `queue` compose profile — see rtsp-streamer above for
@@ -544,6 +558,13 @@ services:
     build:
       context: ./rag-service
       dockerfile: Dockerfile
+      # Proxy must reach the BUILD too: apt-get/pip/npm run inside the
+      # builder, not the final container, so the service-level
+      # environment block does not apply. HTTP_PROXY/HTTPS_PROXY are
+      # predefined build args -- no ARG declaration is needed in the
+      # Dockerfile and they are not baked into the image.
+      args:
+        <<: *egress-proxy
     image: ${REGISTRY_REPO:-intel}/rag-service:${RELEASE_TAG:-latest}
     container_name: rag-service
     # Hardcoded to match the image's baked-in app user and the
@@ -805,6 +826,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Proxy must reach the BUILD too: apt-get/pip/npm run inside the
+      # builder, not the final container, so the service-level
+      # environment block does not apply. HTTP_PROXY/HTTPS_PROXY are
+      # predefined build args -- no ARG declaration is needed in the
+      # Dockerfile and they are not baked into the image.
+      args:
+        <<: *egress-proxy
     image: ${REGISTRY_REPO:-intel}/kiosk-core:${RELEASE_TAG:-latest}
     container_name: kiosk-core
     user: "1000:1000"
@@ -1098,6 +1126,13 @@ services:
     build:
       context: .
       dockerfile: identity-service/Dockerfile
+      # Proxy must reach the BUILD too: apt-get/pip/npm run inside the
+      # builder, not the final container, so the service-level
+      # environment block does not apply. HTTP_PROXY/HTTPS_PROXY are
+      # predefined build args -- no ARG declaration is needed in the
+      # Dockerfile and they are not baked into the image.
+      args:
+        <<: *egress-proxy
     image: ${REGISTRY_REPO:-intel}/identity-service:${RELEASE_TAG:-latest}
     container_name: identity-service
     profiles: ["identity"]
@@ -1153,6 +1188,13 @@ services:
     build:
       context: ./kiosk-ui
       dockerfile: Dockerfile
+      # Proxy must reach the BUILD too: apt-get/pip/npm run inside the
+      # builder, not the final container, so the service-level
+      # environment block does not apply. HTTP_PROXY/HTTPS_PROXY are
+      # predefined build args -- no ARG declaration is needed in the
+      # Dockerfile and they are not baked into the image.
+      args:
+        <<: *egress-proxy
     image: ${REGISTRY_REPO:-intel}/kiosk-ui:${RELEASE_TAG:-latest}
     container_name: kiosk-ui
     ports:
