@@ -138,10 +138,30 @@ inside their containers on first run, which is why `HF_HUB_OFFLINE=0`
   an empty `models--*/` directory or an interrupted download does not.
 
   The probe runs in a container because a host `curl` says nothing about what
-  a container reaches through Docker's `proxies.default`. If no local image is
-  available to probe with, the result is treated as **inconclusive** and
-  startup proceeds with a warning rather than being blocked on an unverified
-  verdict. `HF_HUB_OFFLINE=1` is always honoured and never overridden; set
+  a container reaches through Docker's `proxies.default`. It uses **`curl`**,
+  and picks the probe image by whether it actually has `curl` or `wget` rather
+  than by name — two things matter here:
+
+  - huggingface.co's edge returns **`403 Forbidden` to busybox `wget`** even
+    when the network path is fine (verified on a host where `wget` got `403`
+    and `curl` got `200` over the same proxy). A wget-only `403` is therefore
+    reported as *inconclusive*, never as "unreachable".
+  - some service images ship neither `curl` nor `wget`, so probing with them
+    fails with `wget: not found`, which is indistinguishable from no egress.
+
+  An inconclusive probe drives **no** decision — it neither blocks startup nor
+  switches to offline mode, and `HF_HUB_OFFLINE` is left exactly as you set
+  it. Guessing "offline" is not a safe default: `optimum-cli export openvino`
+  must reach the Hub API to infer a model's task, so forcing offline on a host
+  that is actually online makes the first-run IR export fail and
+  audio-analyzer crash-loop.
+
+  This is also why the **converted IR volume** (`audio_analyzer_models`) is
+  what gets inspected, not just the Hugging Face source cache: cached source
+  weights are not sufficient for an offline start, because the conversion step
+  itself needs the Hub.
+
+  `HF_HUB_OFFLINE=1` is always honoured and never overridden; set
   `HF_AUTO_OFFLINE=false` to restore the old warn-and-continue behaviour.
 
   Intra-cluster traffic always bypasses the proxy via the shared `NO_PROXY`

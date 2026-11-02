@@ -50,42 +50,96 @@ if [ "$HF_AUTO_OFFLINE" = "false" ] || [ "$HF_AUTO_OFFLINE" = "FALSE" ]; then
 fi
 
 # Probe from inside a container, not the host: the host may have egress (or a
-# proxy in the shell) that the containers do not. Fall back to the host only
-# when no small local image is available.
-# Any local image with a shell works. Prefer a tiny one, but fall back to the
-# stack's own images rather than giving up: without a probe image we can
-# neither test egress the way a container sees it nor inspect the caches.
+# proxy in the shell) that the containers do not.
+#
+# The probe tool matters more than the probe image. huggingface.co sits behind
+# an edge that rejects busybox wget with "403 Forbidden" even when the network
+# path is perfectly fine -- verified on a host where busybox wget got 403 and
+# curl got 200 through the SAME proxy, with and without it. Treating that 403
+# as "no egress" forces HF_HUB_OFFLINE=1 on a perfectly online host, and that
+# breaks startup: `optimum-cli export openvino` has to reach the Hub API to
+# infer a model's task, so a first-run IR export fails offline even when the
+# source weights are cached.
+#
+# So: prefer an image that has curl, and never let a wget 403 alone mean
+# "unreachable". The stack's own images carry curl and are the most faithful
+# probe available -- same base, same TLS stack, same network as the real
+# workload -- so they come first; alpine/busybox are a last resort.
+#
+# Pick by CAPABILITY, not by name: some service images ship neither curl nor
+# wget (audio-analyzer is one), so probing with them silently fails with
+# "wget: not found" and looks exactly like no egress. Ask each candidate what
+# it actually has, prefer curl, and remember which tool was found.
 PROBE_IMG=""
-for I in alpine:latest busybox:latest alpine busybox \
-         "${REGISTRY_REPO:-intel}/kiosk-core:${RELEASE_TAG:-latest}" \
+PROBE_TOOL=""
+for I in "${REGISTRY_REPO:-intel}/text-to-speech:${RELEASE_TAG:-latest}" \
          "${REGISTRY_REPO:-intel}/rag-service:${RELEASE_TAG:-latest}" \
-         "${REGISTRY_REPO:-intel}/audio-analyzer:${RELEASE_TAG:-latest}"; do
-    if docker image inspect "$I" >/dev/null 2>&1; then PROBE_IMG="$I"; break; fi
+         "${REGISTRY_REPO:-intel}/kiosk-core:${RELEASE_TAG:-latest}" \
+         "${REGISTRY_REPO:-intel}/audio-analyzer:${RELEASE_TAG:-latest}" \
+         alpine:latest busybox:latest alpine busybox; do
+    docker image inspect "$I" >/dev/null 2>&1 || continue
+    TOOL=$(docker run --rm --entrypoint sh "$I" -c \
+        'if command -v curl >/dev/null 2>&1; then echo curl
+         elif command -v wget >/dev/null 2>&1; then echo wget
+         else echo none; fi' 2>/dev/null | tr -d '\r\n')
+    # Any image with a shell can still inspect the cache volumes.
+    [ -n "$PROBE_IMG" ] || PROBE_IMG="$I"
+    case "$TOOL" in
+        curl) PROBE_IMG="$I"; PROBE_TOOL=curl; break ;;
+        wget) [ -n "$PROBE_TOOL" ] || { PROBE_IMG="$I"; PROBE_TOOL=wget; } ;;
+    esac
 done
+
+# Ask for the API endpoint huggingface_hub itself calls, not just the landing
+# page, so a proxy that serves the site but blocks the API is caught.
+HF_PROBE_URL="https://huggingface.co/api/models/openai/whisper-base"
+
+# Exit 42 = "the tool was rejected, not the network" -> inconclusive.
+PROBE_CMD='if command -v curl >/dev/null 2>&1; then
+    curl -fsS --connect-timeout 5 --max-time 15 -o /dev/null "$1" 2>&1
+else
+    out=$(wget -q -T 10 --spider "$1" 2>&1) || {
+        case "$out" in
+            *403*|*Forbidden*) echo "$out"; exit 42 ;;
+        esac
+        echo "$out"; exit 1
+    }
+fi'
 
 net_ok=""
 probe_reason=""
 probe_inconclusive=""
-if [ -n "$PROBE_IMG" ]; then
+if [ -n "$PROBE_IMG" ] && [ -n "$PROBE_TOOL" ]; then
     # Pass the proxy through exactly as docker-compose.yml does, so the probe
     # tests the same path the services will take.
-    if probe_out=$(docker run --rm \
+    probe_out=$(docker run --rm --entrypoint sh \
         ${HTTP_PROXY:+-e HTTP_PROXY="$HTTP_PROXY"} \
         ${http_proxy:+-e http_proxy="$http_proxy"} \
         ${HTTPS_PROXY:+-e HTTPS_PROXY="$HTTPS_PROXY"} \
         ${https_proxy:+-e https_proxy="$https_proxy"} \
-        "$PROBE_IMG" \
-        sh -c 'wget -q -T 6 --spider https://huggingface.co 2>&1' 2>&1); then
+        ${NO_PROXY:+-e NO_PROXY="$NO_PROXY"} \
+        ${no_proxy:+-e no_proxy="$no_proxy"} \
+        "$PROBE_IMG" -c "$PROBE_CMD" probe "$HF_PROBE_URL" 2>&1)
+    probe_rc=$?
+    probe_reason=$(printf '%s' "$probe_out" | tr '\n' ' ' | sed 's/  */ /g')
+
+    if [ "$probe_rc" -eq 0 ]; then
         net_ok=1
+    elif [ "$probe_rc" -eq 42 ]; then
+        # Only wget was available and the Hub's edge refused it. That says
+        # nothing about reachability, and guessing wrong here is expensive in
+        # both directions, so defer rather than decide.
+        probe_inconclusive=1
+        probe_reason="only busybox wget was available to probe with and huggingface.co refused it (${probe_reason}); this does not mean the Hub is unreachable"
     else
-        probe_reason=$(printf '%s' "$probe_out" | tr '\n' ' ' | sed 's/  */ /g')
         case "$probe_reason" in
-            *40[37]*|*"Forbidden"*|*"Proxy Authentication"*)
-                probe_reason="the proxy refused the request (${probe_reason}) -- huggingface.co is blocked by your proxy, not merely unroutable" ;;
-            "") probe_reason="no response (connection timed out or DNS failed)" ;;
+            *"407"*|*"Proxy Authentication"*)
+                probe_reason="the proxy demanded authentication (${probe_reason})" ;;
+            "")
+                probe_reason="no response (connection timed out or DNS failed)" ;;
         esac
     fi
-elif curl -fsS --connect-timeout 3 --max-time 6 -o /dev/null https://huggingface.co 2>/dev/null; then
+elif curl -fsS --connect-timeout 3 --max-time 6 -o /dev/null "https://huggingface.co/api/models/openai/whisper-base" 2>/dev/null; then
     # --fail: without it curl exits 0 on an HTTP 403 from a filtering proxy,
     # which would select online mode for a Hub we cannot actually read.
     net_ok=1
@@ -100,6 +154,23 @@ if [ -n "$net_ok" ]; then
     exit 0
 fi
 
+# An inconclusive probe must not drive ANY decision -- neither blocking
+# startup nor silently switching to offline. Forcing offline on a host that is
+# actually online is not a safe default: `optimum-cli export openvino` needs
+# the Hub API to infer a model's task, so the first-run IR export fails and
+# the service crash-loops. Leave the caller's value alone and say why.
+if [ -n "$probe_inconclusive" ] || [ -z "$PROBE_IMG" ] || [ -z "$PROBE_TOOL" ]; then
+    say ""
+    say "[hf] Could not reliably determine whether huggingface.co is reachable:"
+    say "[hf]   ${probe_reason:-no container image with curl or wget to probe with}"
+    say "[hf] Continuing with HF_HUB_OFFLINE=${HF_HUB_OFFLINE} rather than"
+    say "[hf] guessing. Pull a curl-capable image for an accurate probe, or set"
+    say "[hf] HF_HUB_OFFLINE explicitly in .env."
+    say ""
+    printf '%s\n' "$HF_HUB_OFFLINE"
+    exit 0
+fi
+
 # No egress confirmed. Decide between auto-offline and fail-fast on cache
 # contents -- but only if we were able to look properly.
 #
@@ -108,10 +179,18 @@ fi
 # counted. The size floor rejects an empty models--*/ directory and truncated
 # files: a real ASR/TTS/LLM weight file is tens of MB at minimum, so 1 MiB is
 # far below any true positive while excluding configs and tokenizer JSON.
+#
+# The IR volumes are checked too, not just the HF source caches. Cached source
+# weights are NOT sufficient for an offline start: audio-analyzer converts the
+# model to OpenVINO IR on first run, and `optimum-cli export openvino` must
+# reach the Hub API to infer the model's task. Offline, that export dies with
+# "Hugging Face Hub is not reachable and we cannot infer the task from a
+# cached model", the IR never appears, and the service crash-loops. Offline
+# mode is only safe once the IR already exists.
 cache_warm=0
 cache_checked=0
 if [ -n "$PROBE_IMG" ]; then
-    for V in audio_analyzer_cache text_to_speech_cache rag_service_hf_cache; do
+    for V in audio_analyzer_models text_to_speech_cache rag_service_hf_cache; do
         VOL="${COMPOSE_PROJECT}_${V}"
         docker volume inspect "$VOL" >/dev/null 2>&1 || continue
         cache_checked=$((cache_checked + 1))
@@ -130,28 +209,12 @@ if [ "$cache_warm" -ge 3 ]; then
     say ""
     say "[hf] huggingface.co is unreachable from a container:"
     say "[hf]   ${probe_reason}"
-    say "[hf] All 3 model caches hold real weight files, so starting with"
+    say "[hf] The converted model caches hold real weight files, so starting with"
     say "[hf] HF_HUB_OFFLINE=1 -- the services load from cache instead of"
     say "[hf] stalling on a live Hub call."
     say "[hf] Set HF_AUTO_OFFLINE=false to disable this."
     say ""
     printf '1\n'
-    exit 0
-fi
-
-# Never block on a verdict we could not actually establish. Without a probe
-# image we can inspect neither egress-as-a-container-sees-it nor the caches,
-# and a host-only curl says nothing about what the containers can reach
-# through Docker's proxies.default. Warn and let the run proceed.
-if [ -n "$probe_inconclusive" ] || [ -z "$PROBE_IMG" ]; then
-    say ""
-    say "[hf] Could not verify Hub reachability or the model caches:"
-    say "[hf]   ${probe_reason:-no container image available to probe with}"
-    say "[hf] Continuing with HF_HUB_OFFLINE=${HF_HUB_OFFLINE} rather than"
-    say "[hf] blocking on an unverified verdict. If startup then hangs, this"
-    say "[hf] is why -- see docs/user-guide/troubleshooting.md."
-    say ""
-    printf '%s\n' "$HF_HUB_OFFLINE"
     exit 0
 fi
 

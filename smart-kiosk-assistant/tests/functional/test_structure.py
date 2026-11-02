@@ -391,3 +391,56 @@ class TestProxyConfiguration:
             "models--*/ directory or an interrupted download is not counted "
             "as a warm cache"
         )
+
+    @pytest.mark.tier1
+    def test_resolver_probes_with_curl_not_busybox_wget(self):
+        """A busybox `wget` 403 from the Hub's edge must not mean "no egress".
+
+        Observed on a working host: busybox ``wget`` gets ``403 Forbidden``
+        from huggingface.co while ``curl`` gets ``200`` over the same network,
+        with and without the proxy. Trusting wget there forces
+        ``HF_HUB_OFFLINE=1`` on an online host, which breaks startup outright:
+        ``optimum-cli export openvino`` must reach the Hub API to infer a
+        model's task, so the first-run IR export dies and audio-analyzer
+        crash-loops.
+        """
+        resolver = (_KIOSK_ROOT / "scripts" / "resolve-hf-offline.sh").read_text()
+
+        assert "PROBE_TOOL" in resolver, (
+            "the probe image must be chosen by whether it actually has curl "
+            "or wget - some service images ship neither, and probing with "
+            "them fails with 'wget: not found', which looks like no egress"
+        )
+        assert "exit 42" in resolver, (
+            "a wget-only 403 must be reported as inconclusive, not as an "
+            "unreachable Hub"
+        )
+        assert "/api/models/" in resolver, (
+            "probe the API endpoint huggingface_hub itself calls, so a proxy "
+            "that serves the landing page but blocks the API is caught"
+        )
+
+        # The inconclusive bail-out must precede the cache decision, otherwise
+        # an unverified probe still silently selects offline mode.
+        assert resolver.index("probe_inconclusive\" ] || [ -z \"$PROBE_IMG") < \
+            resolver.index("cache_warm=0"), (
+            "the inconclusive check must come BEFORE the cache evaluation; "
+            "an unestablished verdict must drive no decision at all"
+        )
+
+    @pytest.mark.tier1
+    def test_resolver_checks_the_converted_model_cache(self):
+        """Cached source weights alone do not make an offline start safe.
+
+        audio-analyzer converts the model to OpenVINO IR on first run via
+        ``optimum-cli``, which needs the Hub API to infer the task. Offline
+        mode is only viable once that IR already exists, so the IR volume -
+        not just the Hugging Face source cache - must be what is inspected.
+        """
+        resolver = (_KIOSK_ROOT / "scripts" / "resolve-hf-offline.sh").read_text()
+
+        assert "audio_analyzer_models" in resolver, (
+            "the resolver must verify the exported OpenVINO IR volume; the "
+            "Hugging Face source cache being populated does not mean the "
+            "service can start offline"
+        )
