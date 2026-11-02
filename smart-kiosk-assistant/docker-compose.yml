@@ -759,13 +759,33 @@ services:
   # container's uid before ovms-llm starts; it runs once per `up` (fast,
   # no-op on a volume that is already owned correctly) and exits, gating
   # ovms-llm via depends_on/service_completed_successfully below.
+  # The same uid-5000 problem applies to the ./models bind mount, and bites
+  # harder: smart-kiosk-assistant/models/ is gitignored, so on a fresh clone
+  # it does not exist and Docker creates the bind target as root:root 0755.
+  # ovms-llm then cannot create its model directory and dies with
+  #   Libgit2 clone error: 2 ... failed to make directory '/models/OpenVINO':
+  #   Permission denied
+  # taking every dependent service down with it (ITEP-96305). It needs write
+  # access to /models itself, not just the subdirectory, because it also
+  # writes a sibling '/models/OpenVINO.lfswip' marker there.
+  #
+  # `make up` hides this: its `mkdir -p models` (Makefile) creates the
+  # directory as the host user first. The documented Quick Start path -
+  # `docker compose pull && docker compose up -d`, with no make involved -
+  # has no such step, which is why this only reproduces for partners.
+  #
+  # Mode, not ownership: chown -R here would break models/identity, which is
+  # written by identity-service and by the host. 0777 on the top directory
+  # alone lets both uid 5000 and the host user create entries, touches
+  # nothing inside, and matches the state a working host already has.
   ovms-cache-init:
     image: busybox
     container_name: ovms-cache-init
     user: root
     volumes:
       - ovms_ov_cache:/tmp/ov_cache
-    command: chown -R 5000:5000 /tmp/ov_cache
+      - ./models:/models
+    command: sh -c "chown -R 5000:5000 /tmp/ov_cache && chmod 0777 /models"
 
   ovms-llm:
     image: openvino/model_server:latest-gpu

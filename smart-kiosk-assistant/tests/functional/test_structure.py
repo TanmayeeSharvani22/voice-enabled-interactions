@@ -444,3 +444,65 @@ class TestProxyConfiguration:
             "Hugging Face source cache being populated does not mean the "
             "service can start offline"
         )
+
+
+class TestOvmsModelsBindMount:
+    """Guards the fresh-clone bring-up path for ovms-llm (ITEP-96305)."""
+
+    @staticmethod
+    def _load_compose() -> dict:
+        import yaml
+
+        with open(_KIOSK_ROOT / "docker-compose.yml") as fh:
+            return yaml.safe_load(fh)
+
+    @pytest.mark.tier1
+    def test_models_bind_mount_is_made_writable_before_ovms_starts(self):
+        """``docker compose up -d`` must work on a clone with no ``models/``.
+
+        ``smart-kiosk-assistant/models/`` is gitignored, so it does not exist
+        on a fresh clone and Docker creates the bind target as ``root:root
+        0755``. ovms-llm runs as uid 5000 and then dies with::
+
+            Libgit2 clone error: 2 ... failed to make directory
+            '/models/OpenVINO': Permission denied
+
+        taking every dependent service down with it. ``make up`` masks this
+        via its own ``mkdir -p models``; the documented Quick Start
+        (``docker compose pull && docker compose up -d``) has no such step.
+        """
+        compose = self._load_compose()
+        init = compose["services"]["ovms-cache-init"]
+
+        mounts = [str(v) for v in init.get("volumes", [])]
+        assert any(m.startswith("./models:") for m in mounts), (
+            "ovms-cache-init must mount ./models so it can fix the "
+            "permissions Docker gives a freshly created bind target"
+        )
+        assert "/models" in str(init.get("command", "")), (
+            "ovms-cache-init must make /models writable by uid 5000 before "
+            "ovms-llm starts"
+        )
+
+        # Ownership must be left alone: models/identity is written by
+        # identity-service and by the host, so a recursive chown would break
+        # it. Only the mode of the top-level directory may change.
+        command = str(init["command"])
+        assert "chown -R 5000:5000 /models" not in command, (
+            "do not recursively chown /models - models/identity is written "
+            "by identity-service and by the host user"
+        )
+
+    @pytest.mark.tier1
+    def test_ovms_llm_waits_for_the_permission_fix(self):
+        """The fix is useless if ovms-llm can start before it completes."""
+        compose = self._load_compose()
+        depends = compose["services"]["ovms-llm"].get("depends_on", {})
+
+        assert "ovms-cache-init" in depends, (
+            "ovms-llm must depend on ovms-cache-init, otherwise it can start "
+            "before /models is writable"
+        )
+        assert depends["ovms-cache-init"]["condition"] == "service_completed_successfully", (
+            "ovms-llm must wait for ovms-cache-init to finish, not merely start"
+        )
