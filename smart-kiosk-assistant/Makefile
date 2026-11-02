@@ -136,47 +136,26 @@ _RTSP_SOURCE_MODE      = $(if $(_RTSP_SOURCE_MODE_RAW),$(_RTSP_SOURCE_MODE_RAW),
 _RTSP_LIVE_ON          = $(filter live,$(_RTSP_SOURCE_MODE))
 _CAMERA_DEVICE_RAW     = $(strip $(CAMERA_DEVICE))
 _RTSP_CAMERA_DEVICE    = $(if $(_RTSP_LIVE_ON),$(_CAMERA_DEVICE_RAW),/dev/null)
-COMPOSE_BASE           = RTSP_SOURCE_MODE=$(_RTSP_SOURCE_MODE) RTSP_CAMERA_DEVICE=$(_RTSP_CAMERA_DEVICE) docker compose -f $(COMPOSE_FILE) $(_PROXY_FILE)
+COMPOSE_BASE           = RTSP_SOURCE_MODE=$(_RTSP_SOURCE_MODE) RTSP_CAMERA_DEVICE=$(_RTSP_CAMERA_DEVICE) docker compose -f $(COMPOSE_FILE)
 
-# PROXY=true appends the opt-in egress-proxy override, so proxied hosts get
-# check-env, the identity/queue profiles and the proxy settings in one command:
+# Egress proxy needs no Makefile support and no override file: docker-compose.yml
+# declares HTTP_PROXY/HTTPS_PROXY (both letter cases) as value-less keys, which
+# Compose resolves from the shell or .env and omits entirely when unset. See the
+# x-egress-proxy anchor there.
 #
-#   make up PROXY=true
-#
-# Running `docker compose -f docker-compose.yml -f docker-compose.proxy.yml up`
-# by hand works too, but skips check-env and drops the profile flags that
-# `make up` adds (queue services are on by default via QUEUE=true).
-PROXY       ?= false
-_PROXY_ON    = $(filter true,$(strip $(PROXY)))
-_PROXY_FILE  = $(if $(_PROXY_ON),-f docker-compose.proxy.yml,)
+# PROXY=true is still accepted so older docs and scripts keep working, but it is
+# now a no-op.
+PROXY ?= false
+ifneq (,$(filter true,$(strip $(PROXY))))
+$(info [proxy] PROXY=true is no longer needed: docker-compose.yml now passes HTTP_PROXY/HTTPS_PROXY through from your shell or .env automatically.)
+endif
 
-# With PROXY=true the caller has explicitly asked to be proxied, so falling
-# back to the shell's own proxy is intent rather than accident -- which is the
-# reason docker-compose.proxy.yml refuses to read HTTP_PROXY directly (doing so
-# would inject every developer's ambient proxy, including host-only ones
-# containers cannot reach, into runs that never asked for one).
-#
-# An explicit KIOSK_HTTP_PROXY always wins. The test is `ifeq (,$(strip ...))`
-# rather than `?=` because a .env created before these assignments were
-# commented out still defines them as empty, which `?=` would treat as set.
-ifneq ($(_PROXY_ON),)
-ifeq ($(strip $(KIOSK_HTTP_PROXY)),)
-KIOSK_HTTP_PROXY := $(or $(http_proxy),$(HTTP_PROXY))
-_PROXY_DERIVED   := 1
-endif
-ifeq ($(strip $(KIOSK_HTTPS_PROXY)),)
-KIOSK_HTTPS_PROXY := $(or $(https_proxy),$(HTTPS_PROXY),$(KIOSK_HTTP_PROXY))
-endif
-export KIOSK_HTTP_PROXY
-export KIOSK_HTTPS_PROXY
-# Never derive a proxy silently: it changes container egress, and a wrong value
-# surfaces as every model download hanging with no stated cause.
-ifdef _PROXY_DERIVED
-$(info [proxy] PROXY=true, using proxy from the shell: $(KIOSK_HTTP_PROXY))
-ifneq (,$(or $(findstring 127.0.0.1,$(KIOSK_HTTP_PROXY)),$(findstring localhost,$(KIOSK_HTTP_PROXY))))
-$(warning [proxy] $(KIOSK_HTTP_PROXY) is loopback: inside a container that is the container itself, not this host. Downloads will hang. Set KIOSK_HTTP_PROXY to a routable address.)
-endif
-endif
+# A loopback proxy is the single most common misconfiguration here: inside a
+# container 127.0.0.1 is the container itself, not this host, so every model
+# download hangs with no stated cause. Warn once, at parse time.
+_HTTP_PROXY_VALUE = $(strip $(or $(http_proxy),$(HTTP_PROXY)))
+ifneq (,$(or $(findstring 127.0.0.1,$(_HTTP_PROXY_VALUE)),$(findstring localhost,$(_HTTP_PROXY_VALUE))))
+$(warning [proxy] $(_HTTP_PROXY_VALUE) is loopback: inside a container that is the container itself, not this host. Model downloads will hang. Set HTTP_PROXY to an address routable from containers.)
 endif
 
 # Services with fully local build contexts (built from source in this repo).
@@ -490,10 +469,20 @@ check-env: ## Validate .env and all required variables before running the stack
 			echo "    If the containers do have egress (for example a proxy configured in"; \
 			echo "    ~/.docker/config.json), ignore this and continue."; \
 			echo "    If they do not, audio-analyzer/text-to-speech will raise httpx.ConnectError"; \
-			echo "    at startup and never become healthy. Behind a proxy kept in .env, run:"; \
-			echo "      make up PROXY=true"; \
+			echo "    at startup and never become healthy. Behind a proxy, set HTTP_PROXY"; \
+			echo "    and HTTPS_PROXY in your shell or .env, then re-run make up."; \
 			echo "    See docs/user-guide/troubleshooting.md."; \
 		fi; \
+	fi; \
+	\
+	if [ -f .env ] && grep -qE '^[[:space:]]*(HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy)[[:space:]]*=[[:space:]]*$$' .env; then \
+		echo "  $(RED)✗ .env contains an empty proxy assignment$(NC)"; \
+		grep -nE '^[[:space:]]*(HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy)[[:space:]]*=[[:space:]]*$$' .env | sed 's/^/      line /'; \
+		echo "    An empty value is NOT the same as unset: Compose injects the empty"; \
+		echo "    string into the container, which suppresses the proxy Docker would"; \
+		echo "    otherwise take from ~/.docker/config.json and breaks model downloads"; \
+		echo "    (ITEP-97604). Comment the line out, or give it a real value."; \
+		ERRORS=$$((ERRORS+1)); \
 	fi; \
 	\
 	if [ "$(_RTSP_SOURCE_MODE_RAW)" != "" ] && [ "$(_RTSP_SOURCE_MODE_RAW)" != "sample" ] && [ "$(_RTSP_SOURCE_MODE_RAW)" != "live" ]; then \

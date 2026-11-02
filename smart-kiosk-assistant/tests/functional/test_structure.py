@@ -196,15 +196,41 @@ class TestProxyConfiguration:
                 f"anchor: {missing}. Keep the two in sync."
             )
 
-    @pytest.mark.tier1
-    def test_main_compose_does_not_declare_empty_proxy_vars(self):
-        """Declaring HTTP_PROXY with an empty default clobbers ~/.docker/config.json.
+    #: Proxy variables that must be passed through, in both letter cases.
+    _PROXY_KEYS = ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy")
 
-        Docker injects proxy settings from config.json only for variables that
-        are not already set, so ``HTTP_PROXY: ${HTTP_PROXY:-}`` would always
-        inject an empty value and override a working host proxy. Proxy values
-        belong in the opt-in docker-compose.proxy.yml override instead.
+    @pytest.mark.tier1
+    def test_downloading_services_pass_proxy_through_without_a_default(self):
+        """Proxy keys must be declared value-less, never with an empty default.
+
+        ``HTTP_PROXY: ${HTTP_PROXY:-}`` injects an EMPTY value when the
+        variable is unset, which overrides the proxy Docker would otherwise
+        inject from ``~/.docker/config.json`` (``proxies.default``) and breaks
+        the first-run model download on exactly the proxied hosts it was meant
+        to help (ITEP-97604).
+
+        A value-less key is resolved from the shell or .env when set, and
+        omitted from the container entirely when unset.
         """
+        compose = self._load_compose()
+
+        for service in self._ANCHORED_SERVICES:
+            env = compose["services"][service]["environment"]
+            for key in self._PROXY_KEYS:
+                assert key in env, (
+                    f"{service} must declare {key} so a host proxy reaches the "
+                    f"container; Python reads the lower-case names and curl "
+                    f"reads either."
+                )
+                assert env[key] is None, (
+                    f"{service}.{key} must be declared with NO value "
+                    f"(got {env[key]!r}). A ${{...:-}} default injects an empty "
+                    f"string and clobbers ~/.docker/config.json."
+                )
+
+    @pytest.mark.tier1
+    def test_no_service_declares_an_empty_proxy_default(self):
+        """No service anywhere may give a proxy variable an empty default."""
         compose = self._load_compose()
 
         offenders = []
@@ -212,37 +238,26 @@ class TestProxyConfiguration:
             env = service.get("environment") or {}
             if not isinstance(env, dict):
                 continue
-            for key in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"):
-                if key in env:
-                    offenders.append(f"{name}.{key}")
+            for key in self._PROXY_KEYS:
+                value = env.get(key)
+                if value is not None and "${" in str(value):
+                    offenders.append(f"{name}.{key}={value!r}")
 
         assert not offenders, (
-            "docker-compose.yml must not declare proxy variables (they would "
-            "override ~/.docker/config.json with an empty value). Use "
-            f"docker-compose.proxy.yml instead. Found: {offenders}"
+            "Proxy variables must be declared value-less so an unset proxy is "
+            "omitted rather than injected as an empty string. Found: "
+            f"{offenders}"
         )
 
     @pytest.mark.tier1
-    def test_proxy_override_file_exists_and_sets_proxies(self):
-        """The opt-in override must exist and set proxies for the downloading services."""
-        import yaml
+    def test_proxy_override_file_is_gone(self):
+        """The opt-in override file was folded back into docker-compose.yml.
 
-        path = _KIOSK_ROOT / "docker-compose.proxy.yml"
-        assert path.is_file(), "docker-compose.proxy.yml not found"
-
-        with open(path) as fh:
-            override = yaml.safe_load(fh)
-
-        for service in self._ANCHORED_SERVICES:
-            env = override["services"][service]["environment"]
-            assert "HTTP_PROXY" in env and "HTTPS_PROXY" in env, (
-                f"{service} must set HTTP_PROXY and HTTPS_PROXY in the proxy override"
-            )
-            # Must read dedicated names: compose resolves the shell before
-            # .env, so plain HTTPS_PROXY would leak the host shell's proxy.
-            assert "KIOSK_HTTP_PROXY" in env["HTTP_PROXY"], (
-                f"{service} proxy override must read KIOSK_HTTP_PROXY"
-            )
-            assert "KIOSK_HTTPS_PROXY" in env["HTTPS_PROXY"] and "${HTTPS_PROXY" not in env["HTTPS_PROXY"], (
-                f"{service} HTTPS proxy must come from KIOSK_HTTPS_PROXY, not the shell's HTTPS_PROXY"
-            )
+        Keeping a second compose file solely for proxy settings meant proxied
+        hosts had to discover and pass an extra flag; the value-less keys make
+        it unnecessary.
+        """
+        assert not (_KIOSK_ROOT / "docker-compose.proxy.yml").exists(), (
+            "docker-compose.proxy.yml should no longer exist - proxy "
+            "passthrough is declared inline in docker-compose.yml"
+        )

@@ -61,54 +61,38 @@ inside their containers on first run, which is why `HF_HUB_OFFLINE=0`
 (online) is the shipped default in `.env.example`. Fix with either:
 
 - **Behind a proxy (first run on a proxied host).** Keep `HF_HUB_OFFLINE=0`
-  so the models can be fetched. If your proxy is already configured in
-  `~/.docker/config.json` under `proxies.default`, Docker injects it for you
-  and there is nothing to do. Otherwise set it in `.env` and start the stack
-  with the opt-in override — the variables are deliberately not applied
-  without it, so an empty value can never clobber your `config.json` proxy:
+  so the models can be fetched, and make sure the containers can see your
+  proxy. In order of preference:
 
-  ```bash
-  # .env  (uncomment these two lines)
-  KIOSK_HTTP_PROXY=http://proxy.example.com:3128
-  KIOSK_HTTPS_PROXY=http://proxy.example.com:3128   # optional; defaults to KIOSK_HTTP_PROXY
-  ```
+  1. **Proxy already in `~/.docker/config.json`** under `proxies.default` —
+     Docker injects it into every container and there is nothing to do.
 
-  ```bash
-  make up PROXY=true
-  ```
+  2. **Proxy exported in your shell** — `docker-compose.yml` declares
+     `HTTP_PROXY`/`HTTPS_PROXY` (both letter cases) as value-less keys, so
+     Compose passes your shell values straight through:
 
-  Exporting them in your shell works too, but only while the two lines in
-  `.env` stay commented out — the Makefile does `-include .env`, and in GNU
-  make a makefile assignment silently overrides the environment, so an
-  uncommented `KIOSK_HTTP_PROXY=` would discard your exported value:
+     ```bash
+     export HTTP_PROXY=http://proxy.example.com:3128
+     export HTTPS_PROXY=http://proxy.example.com:3128
+     make up
+     ```
 
-  ```bash
-  export KIOSK_HTTP_PROXY="$http_proxy"
-  export KIOSK_HTTPS_PROXY="$https_proxy"
-  make up PROXY=true
-  ```
+  3. **Proxy pinned in `.env`** — uncomment and fill in:
 
-  Simplest of all: if your shell already has `http_proxy`/`https_proxy` set,
-  `PROXY=true` picks them up on its own and you need set nothing:
+     ```bash
+     # .env
+     HTTP_PROXY=http://proxy.example.com:3128
+     HTTPS_PROXY=http://proxy.example.com:3128
+     ```
 
-  ```bash
-  make up PROXY=true
-  ```
+  Because the keys are value-less rather than `${HTTP_PROXY:-}`, an unset
+  proxy is *omitted* from the container instead of injected as an empty
+  string — so option 1 keeps working even when you set nothing, and no
+  override file or extra `make` flag is required.
 
-  That fallback is deliberately gated on `PROXY=true`. Reading the ambient
-  proxy on every run would silently inject each developer's own proxy —
-  including host-only ones containers cannot reach — into runs that never
-  asked to be proxied. An explicit `KIOSK_HTTP_PROXY` always takes priority.
-
-  If `.env` was created before this behaviour was fixed it may still contain
-  the uncommented empty assignments; comment them out or fill them in. (The
-  `PROXY=true` fallback handles that case too — it treats an empty value as
-  unset.)
-
-  Prefer this over running `docker compose -f docker-compose.yml -f
-  docker-compose.proxy.yml up -d` by hand: the `make` target also runs
-  `check-env` and keeps the identity/queue profile flags that `make up`
-  normally adds (queue services are on by default via `QUEUE=true`).
+  Use an address routable from inside a container. A loopback proxy
+  (`127.0.0.1`/`localhost`) is the container itself, not your host, and
+  downloads will hang; `make` warns if it detects one.
 
   Intra-cluster traffic always bypasses the proxy via the shared `NO_PROXY`
   anchor in `docker-compose.yml`.

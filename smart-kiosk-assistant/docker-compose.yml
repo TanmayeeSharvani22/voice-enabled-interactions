@@ -36,6 +36,41 @@
 # Keep the two in sync when adding a service.
 x-no-proxy: &no-proxy "localhost,127.0.0.1,ovms-llm,kiosk-core,audio-analyzer,text-to-speech,metrics-collector,rag-service,queue-service,rtsp-streamer,identity-service,172.16.0.0/12,10.0.0.0/8"
 
+# ---------------------------------------------------------------------------
+# Egress proxy passthrough, applied to the three services that may download
+# models from huggingface.co on first run (audio-analyzer, text-to-speech,
+# rag-service). Everything else talks only to sibling containers and is
+# covered by the *no-proxy anchor above.
+#
+# Each key is declared with NO value. That is deliberate, and is the only
+# form that behaves correctly on every host:
+#
+#   HTTP_PROXY:                   value is taken from the host shell or .env;
+#                                 when unset the variable is OMITTED from the
+#                                 container entirely.
+#
+#   HTTP_PROXY: ${HTTP_PROXY:-}   WRONG. When unset this injects an EMPTY
+#                                 value, which overrides the proxy Docker
+#                                 would otherwise inject from
+#                                 ~/.docker/config.json (`proxies.default`)
+#                                 and breaks the first-run model download on
+#                                 exactly the proxied hosts it was meant to
+#                                 help.
+#
+# Verified with `docker compose run --rm` on a host with proxies.default set:
+#   unset + null form  -> config.json proxy survives  (http_proxy=http://.../)
+#   unset + ${VAR:-}   -> http_proxy= (empty)         <- clobbered
+#   set   + null form  -> host value passes through, per-variable
+#
+# Both letter cases are listed because Python (httpx / requests /
+# huggingface_hub) reads the lower-case names while curl and apt accept
+# either, and Docker's config.json injection is itself per-variable.
+x-egress-proxy: &egress-proxy
+  HTTP_PROXY:
+  http_proxy:
+  HTTPS_PROXY:
+  https_proxy:
+
 services:
 
   # ---------------------------------------------------------------------------
@@ -323,13 +358,11 @@ services:
       # `make check-env` reports whether the caches actually look populated.
       HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-0}
       TRANSFORMERS_OFFLINE: ${TRANSFORMERS_OFFLINE:-0}
-      # Proxy variables are intentionally NOT declared here. Docker already
-      # injects HTTP_PROXY/HTTPS_PROXY/NO_PROXY from ~/.docker/config.json
-      # (proxies.default) when they are not otherwise set. Declaring them with
-      # a `${HTTP_PROXY:-}` default would inject an EMPTY value and silently
-      # override that mechanism, breaking first-run downloads on exactly the
-      # proxied hosts this is meant to help. Use `make up PROXY=true` (which
-      # layers docker-compose.proxy.yml) to set proxies explicitly from .env.
+      # Egress proxy: passed through from the host shell or .env when set,
+      # omitted otherwise so ~/.docker/config.json still applies. See the
+      # x-egress-proxy anchor at the top of this file for why the keys are
+      # declared without values.
+      <<: *egress-proxy
       NO_PROXY: *no-proxy
       no_proxy: *no-proxy
       # HuggingFace token — required by Pyannote speaker diarization.
@@ -438,11 +471,13 @@ services:
       # httpx.ConnectError at startup, the healthcheck never passes, and every
       # service gated on `depends_on: text-to-speech: service_healthy`
       # (rag-service, kiosk-core) aborts with "dependency failed to start".
-      # Fix that with a proxy (`make up PROXY=true`) or by warming the cache on
-      # a connected host, then setting HF_HUB_OFFLINE=1.
+      # Fix that by exporting HTTP_PROXY/HTTPS_PROXY (or setting them in .env)
+      # on a proxied host, or by warming the cache on a connected host and
+      # then setting HF_HUB_OFFLINE=1.
       HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-0}
       TRANSFORMERS_OFFLINE: ${TRANSFORMERS_OFFLINE:-0}
-      # Proxy variables intentionally NOT declared — see audio-analyzer above.
+      # Egress proxy passthrough — see the x-egress-proxy anchor at the top.
+      <<: *egress-proxy
       NO_PROXY: *no-proxy
       no_proxy: *no-proxy
       # ── TTS engine selection (device-combination benchmarking) ────────────
@@ -601,7 +636,9 @@ services:
       TRANSFORMERS_OFFLINE: ${TRANSFORMERS_OFFLINE:-0}
       # Bypass corporate proxy for all intra-cluster traffic so that
       # requests to ovms-llm, kiosk-core, etc. go directly on the
-      # Docker bridge network instead of through the HTTP proxy.
+      # Docker bridge network instead of through the HTTP proxy. Outbound
+      # Hub traffic still uses the proxy — see the x-egress-proxy anchor.
+      <<: *egress-proxy
       NO_PROXY: *no-proxy
       no_proxy: *no-proxy
       # Domain-specific config (identity, intent rules, reply templates) is
