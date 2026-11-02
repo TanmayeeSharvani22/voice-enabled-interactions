@@ -196,15 +196,41 @@ class TestProxyConfiguration:
                 f"anchor: {missing}. Keep the two in sync."
             )
 
-    @pytest.mark.tier1
-    def test_main_compose_does_not_declare_empty_proxy_vars(self):
-        """Declaring HTTP_PROXY with an empty default clobbers ~/.docker/config.json.
+    #: Proxy variables that must be passed through, in both letter cases.
+    _PROXY_KEYS = ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy")
 
-        Docker injects proxy settings from config.json only for variables that
-        are not already set, so ``HTTP_PROXY: ${HTTP_PROXY:-}`` would always
-        inject an empty value and override a working host proxy. Proxy values
-        belong in the opt-in docker-compose.proxy.yml override instead.
+    @pytest.mark.tier1
+    def test_downloading_services_pass_proxy_through_without_a_default(self):
+        """Proxy keys must be declared value-less, never with an empty default.
+
+        ``HTTP_PROXY: ${HTTP_PROXY:-}`` injects an EMPTY value when the
+        variable is unset, which overrides the proxy Docker would otherwise
+        inject from ``~/.docker/config.json`` (``proxies.default``) and breaks
+        the first-run model download on exactly the proxied hosts it was meant
+        to help (ITEP-97604).
+
+        A value-less key is resolved from the shell or .env when set, and
+        omitted from the container entirely when unset.
         """
+        compose = self._load_compose()
+
+        for service in self._ANCHORED_SERVICES:
+            env = compose["services"][service]["environment"]
+            for key in self._PROXY_KEYS:
+                assert key in env, (
+                    f"{service} must declare {key} so a host proxy reaches the "
+                    f"container; Python reads the lower-case names and curl "
+                    f"reads either."
+                )
+                assert env[key] is None, (
+                    f"{service}.{key} must be declared with NO value "
+                    f"(got {env[key]!r}). A ${{...:-}} default injects an empty "
+                    f"string and clobbers ~/.docker/config.json."
+                )
+
+    @pytest.mark.tier1
+    def test_no_service_declares_an_empty_proxy_default(self):
+        """No service anywhere may give a proxy variable an empty default."""
         compose = self._load_compose()
 
         offenders = []
@@ -212,37 +238,271 @@ class TestProxyConfiguration:
             env = service.get("environment") or {}
             if not isinstance(env, dict):
                 continue
-            for key in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"):
-                if key in env:
-                    offenders.append(f"{name}.{key}")
+            for key in self._PROXY_KEYS:
+                value = env.get(key)
+                if value is not None and "${" in str(value):
+                    offenders.append(f"{name}.{key}={value!r}")
 
         assert not offenders, (
-            "docker-compose.yml must not declare proxy variables (they would "
-            "override ~/.docker/config.json with an empty value). Use "
-            f"docker-compose.proxy.yml instead. Found: {offenders}"
+            "Proxy variables must be declared value-less so an unset proxy is "
+            "omitted rather than injected as an empty string. Found: "
+            f"{offenders}"
         )
 
     @pytest.mark.tier1
-    def test_proxy_override_file_exists_and_sets_proxies(self):
-        """The opt-in override must exist and set proxies for the downloading services."""
+    def test_locally_built_services_pass_proxy_as_build_args(self):
+        """apt-get/pip/npm run in the builder, not the final container.
+
+        The service-level ``environment`` block does not apply at build time,
+        so without ``build.args`` a proxied host gets an apt-get timeout during
+        ``make build REGISTRY=false``. HTTP_PROXY/HTTPS_PROXY are predefined
+        build args, so no ARG declaration is needed in the Dockerfile and they
+        are not baked into the image.
+        """
+        compose = self._load_compose()
+
+        missing = []
+        for name, service in compose.get("services", {}).items():
+            build = service.get("build")
+            if not isinstance(build, dict):
+                continue
+            args = build.get("args") or {}
+            for key in self._PROXY_KEYS:
+                if key not in args:
+                    missing.append(f"{name}.build.args.{key}")
+                elif args[key] is not None:
+                    missing.append(
+                        f"{name}.build.args.{key}={args[key]!r} (must be value-less)"
+                    )
+
+        assert not missing, (
+            "Every locally built service must pass the proxy through as build "
+            f"args, declared value-less. Missing/invalid: {missing}"
+        )
+
+    @pytest.mark.tier1
+    def test_hf_offline_resolver_exists_and_is_executable(self):
+        """`make up` depends on this script to avoid a 600s stall with no egress."""
+        import os
+
+        path = _KIOSK_ROOT / "scripts" / "resolve-hf-offline.sh"
+        assert path.is_file(), "scripts/resolve-hf-offline.sh not found"
+        assert os.access(path, os.X_OK), (
+            "scripts/resolve-hf-offline.sh must be executable; `make up` runs it directly"
+        )
+
+        makefile = (_KIOSK_ROOT / "Makefile").read_text()
+        up_body = makefile.split("\nup:", 1)[1].split("\ndown:", 1)[0]
+        assert "resolve-hf-offline.sh" in up_body, (
+            "the `up` target must resolve HF offline mode before starting the stack"
+        )
+
+    @pytest.mark.tier1
+    def test_proxy_override_file_is_gone(self):
+        """The opt-in override file was folded back into docker-compose.yml.
+
+        Keeping a second compose file solely for proxy settings meant proxied
+        hosts had to discover and pass an extra flag; the value-less keys make
+        it unnecessary.
+        """
+        assert not (_KIOSK_ROOT / "docker-compose.proxy.yml").exists(), (
+            "docker-compose.proxy.yml should no longer exist - proxy "
+            "passthrough is declared inline in docker-compose.yml"
+        )
+
+    @pytest.mark.tier1
+    def test_legacy_kiosk_proxy_variables_are_translated_not_ignored(self):
+        """Deployments still using the removed file's variable names must work.
+
+        ``docker-compose.proxy.yml`` read ``KIOSK_HTTP_PROXY`` /
+        ``KIOSK_HTTPS_PROXY``. A .env carrying only those would otherwise lose
+        egress silently once the file was deleted, and stall on the first
+        model download - the exact failure this change exists to prevent.
+        """
+        makefile = (_KIOSK_ROOT / "Makefile").read_text()
+
+        assert "KIOSK_HTTP_PROXY" in makefile and "KIOSK_HTTPS_PROXY" in makefile, (
+            "the Makefile must still recognise the legacy KIOSK_HTTP_PROXY / "
+            "KIOSK_HTTPS_PROXY names rather than silently ignoring them"
+        )
+        assert "deprecated" in makefile, (
+            "translating the legacy names must emit a deprecation warning so "
+            "they can eventually be removed"
+        )
+
+    @pytest.mark.tier1
+    def test_check_env_detects_exported_and_commented_empty_proxy_lines(self):
+        """`HTTP_PROXY=` in .env reintroduces ITEP-97604; all forms must be caught.
+
+        Compose accepts ``export HTTP_PROXY=`` as an empty value, and does NOT
+        strip a trailing comment - ``HTTP_PROXY= # optional`` becomes the
+        literal string ``# optional``. Both are broken configurations that the
+        original regex, anchored directly after ``=``, let through.
+        """
+        import re
+        import subprocess
+
+        makefile = (_KIOSK_ROOT / "Makefile").read_text()
+        match = re.search(
+            r"grep -qE '(\^\[\[:space:\]\]\*\(export.*?)' \.env", makefile
+        )
+        assert match, "check-env must grep .env for unusable proxy assignments"
+        pattern = match.group(1).replace("$$", "$")
+
+        flagged = ("HTTP_PROXY=", "export HTTPS_PROXY=", "  http_proxy=  ",
+                   "HTTP_PROXY= # optional", "export https_proxy=  # note")
+        allowed = ("#HTTP_PROXY=", "# HTTP_PROXY=http://p:912",
+                   "HTTP_PROXY=http://p:912")
+
+        for line in flagged + allowed:
+            hit = subprocess.run(
+                ["grep", "-qE", pattern], input=line, text=True
+            ).returncode == 0
+            assert hit is (line in flagged), (
+                f"check-env proxy regex misclassified {line!r} "
+                f"(expected {'flagged' if line in flagged else 'allowed'})"
+            )
+
+    @pytest.mark.tier1
+    def test_resolver_never_blocks_on_an_unverified_verdict(self):
+        """Refusing to start is only justified when the verdict is established.
+
+        With no local image to probe with, neither container egress nor the
+        caches can be inspected: a host ``curl`` says nothing about what a
+        container reaches through Docker's ``proxies.default``. Blocking there
+        would break startups that would have worked.
+        """
+        resolver = (_KIOSK_ROOT / "scripts" / "resolve-hf-offline.sh").read_text()
+
+        assert "probe_inconclusive" in resolver, (
+            "the resolver must track whether its verdict was actually "
+            "established before it is allowed to block startup"
+        )
+        assert "curl -fsS" in resolver, (
+            "the host fallback must use curl --fail; without it an HTTP 403 "
+            "from a filtering proxy exits 0 and is misread as working egress"
+        )
+        assert "nc -z" not in resolver, (
+            "a raw TCP connect to :443 is not proof of Hub access and must "
+            "not count as a successful probe"
+        )
+        assert "-size +1024k" in resolver and "*.incomplete" in resolver, (
+            "the cache check must require real weight files, so an empty "
+            "models--*/ directory or an interrupted download is not counted "
+            "as a warm cache"
+        )
+
+    @pytest.mark.tier1
+    def test_resolver_probes_with_curl_not_busybox_wget(self):
+        """A busybox `wget` 403 from the Hub's edge must not mean "no egress".
+
+        Observed on a working host: busybox ``wget`` gets ``403 Forbidden``
+        from huggingface.co while ``curl`` gets ``200`` over the same network,
+        with and without the proxy. Trusting wget there forces
+        ``HF_HUB_OFFLINE=1`` on an online host, which breaks startup outright:
+        ``optimum-cli export openvino`` must reach the Hub API to infer a
+        model's task, so the first-run IR export dies and audio-analyzer
+        crash-loops.
+        """
+        resolver = (_KIOSK_ROOT / "scripts" / "resolve-hf-offline.sh").read_text()
+
+        assert "PROBE_TOOL" in resolver, (
+            "the probe image must be chosen by whether it actually has curl "
+            "or wget - some service images ship neither, and probing with "
+            "them fails with 'wget: not found', which looks like no egress"
+        )
+        assert "exit 42" in resolver, (
+            "a wget-only 403 must be reported as inconclusive, not as an "
+            "unreachable Hub"
+        )
+        assert "/api/models/" in resolver, (
+            "probe the API endpoint huggingface_hub itself calls, so a proxy "
+            "that serves the landing page but blocks the API is caught"
+        )
+
+        # The inconclusive bail-out must precede the cache decision, otherwise
+        # an unverified probe still silently selects offline mode.
+        assert resolver.index("probe_inconclusive\" ] || [ -z \"$PROBE_IMG") < \
+            resolver.index("cache_warm=0"), (
+            "the inconclusive check must come BEFORE the cache evaluation; "
+            "an unestablished verdict must drive no decision at all"
+        )
+
+    @pytest.mark.tier1
+    def test_resolver_checks_the_converted_model_cache(self):
+        """Cached source weights alone do not make an offline start safe.
+
+        audio-analyzer converts the model to OpenVINO IR on first run via
+        ``optimum-cli``, which needs the Hub API to infer the task. Offline
+        mode is only viable once that IR already exists, so the IR volume -
+        not just the Hugging Face source cache - must be what is inspected.
+        """
+        resolver = (_KIOSK_ROOT / "scripts" / "resolve-hf-offline.sh").read_text()
+
+        assert "audio_analyzer_models" in resolver, (
+            "the resolver must verify the exported OpenVINO IR volume; the "
+            "Hugging Face source cache being populated does not mean the "
+            "service can start offline"
+        )
+
+
+class TestOvmsModelsBindMount:
+    """Guards the fresh-clone bring-up path for ovms-llm (ITEP-96305)."""
+
+    @staticmethod
+    def _load_compose() -> dict:
         import yaml
 
-        path = _KIOSK_ROOT / "docker-compose.proxy.yml"
-        assert path.is_file(), "docker-compose.proxy.yml not found"
+        with open(_KIOSK_ROOT / "docker-compose.yml") as fh:
+            return yaml.safe_load(fh)
 
-        with open(path) as fh:
-            override = yaml.safe_load(fh)
+    @pytest.mark.tier1
+    def test_models_bind_mount_is_made_writable_before_ovms_starts(self):
+        """``docker compose up -d`` must work on a clone with no ``models/``.
 
-        for service in self._ANCHORED_SERVICES:
-            env = override["services"][service]["environment"]
-            assert "HTTP_PROXY" in env and "HTTPS_PROXY" in env, (
-                f"{service} must set HTTP_PROXY and HTTPS_PROXY in the proxy override"
-            )
-            # Must read dedicated names: compose resolves the shell before
-            # .env, so plain HTTPS_PROXY would leak the host shell's proxy.
-            assert "KIOSK_HTTP_PROXY" in env["HTTP_PROXY"], (
-                f"{service} proxy override must read KIOSK_HTTP_PROXY"
-            )
-            assert "KIOSK_HTTPS_PROXY" in env["HTTPS_PROXY"] and "${HTTPS_PROXY" not in env["HTTPS_PROXY"], (
-                f"{service} HTTPS proxy must come from KIOSK_HTTPS_PROXY, not the shell's HTTPS_PROXY"
-            )
+        ``smart-kiosk-assistant/models/`` is gitignored, so it does not exist
+        on a fresh clone and Docker creates the bind target as ``root:root
+        0755``. ovms-llm runs as uid 5000 and then dies with::
+
+            Libgit2 clone error: 2 ... failed to make directory
+            '/models/OpenVINO': Permission denied
+
+        taking every dependent service down with it. ``make up`` masks this
+        via its own ``mkdir -p models``; the documented Quick Start
+        (``docker compose pull && docker compose up -d``) has no such step.
+        """
+        compose = self._load_compose()
+        init = compose["services"]["ovms-cache-init"]
+
+        mounts = [str(v) for v in init.get("volumes", [])]
+        assert any(m.startswith("./models:") for m in mounts), (
+            "ovms-cache-init must mount ./models so it can fix the "
+            "permissions Docker gives a freshly created bind target"
+        )
+        assert "/models" in str(init.get("command", "")), (
+            "ovms-cache-init must make /models writable by uid 5000 before "
+            "ovms-llm starts"
+        )
+
+        # Ownership must be left alone: models/identity is written by
+        # identity-service and by the host, so a recursive chown would break
+        # it. Only the mode of the top-level directory may change.
+        command = str(init["command"])
+        assert "chown -R 5000:5000 /models" not in command, (
+            "do not recursively chown /models - models/identity is written "
+            "by identity-service and by the host user"
+        )
+
+    @pytest.mark.tier1
+    def test_ovms_llm_waits_for_the_permission_fix(self):
+        """The fix is useless if ovms-llm can start before it completes."""
+        compose = self._load_compose()
+        depends = compose["services"]["ovms-llm"].get("depends_on", {})
+
+        assert "ovms-cache-init" in depends, (
+            "ovms-llm must depend on ovms-cache-init, otherwise it can start "
+            "before /models is writable"
+        )
+        assert depends["ovms-cache-init"]["condition"] == "service_completed_successfully", (
+            "ovms-llm must wait for ovms-cache-init to finish, not merely start"
+        )

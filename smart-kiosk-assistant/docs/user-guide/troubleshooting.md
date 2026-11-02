@@ -61,54 +61,108 @@ inside their containers on first run, which is why `HF_HUB_OFFLINE=0`
 (online) is the shipped default in `.env.example`. Fix with either:
 
 - **Behind a proxy (first run on a proxied host).** Keep `HF_HUB_OFFLINE=0`
-  so the models can be fetched. If your proxy is already configured in
-  `~/.docker/config.json` under `proxies.default`, Docker injects it for you
-  and there is nothing to do. Otherwise set it in `.env` and start the stack
-  with the opt-in override — the variables are deliberately not applied
-  without it, so an empty value can never clobber your `config.json` proxy:
+  so the models can be fetched, and make sure the containers can see your
+  proxy. In order of preference:
 
-  ```bash
-  # .env  (uncomment these two lines)
-  KIOSK_HTTP_PROXY=http://proxy.example.com:3128
-  KIOSK_HTTPS_PROXY=http://proxy.example.com:3128   # optional; defaults to KIOSK_HTTP_PROXY
-  ```
+  1. **Proxy already in `~/.docker/config.json`** under `proxies.default` —
+     Docker injects it into every container and there is nothing to do.
 
-  ```bash
-  make up PROXY=true
-  ```
+  2. **Proxy exported in your shell** — `docker-compose.yml` declares
+     `HTTP_PROXY`/`HTTPS_PROXY` (both letter cases) as value-less keys, so
+     Compose passes your shell values straight through:
 
-  Exporting them in your shell works too, but only while the two lines in
-  `.env` stay commented out — the Makefile does `-include .env`, and in GNU
-  make a makefile assignment silently overrides the environment, so an
-  uncommented `KIOSK_HTTP_PROXY=` would discard your exported value:
+     ```bash
+     export HTTP_PROXY=http://proxy.example.com:3128
+     export HTTPS_PROXY=http://proxy.example.com:3128
+     make up
+     ```
 
-  ```bash
-  export KIOSK_HTTP_PROXY="$http_proxy"
-  export KIOSK_HTTPS_PROXY="$https_proxy"
-  make up PROXY=true
-  ```
+  3. **Proxy pinned in `.env`** — uncomment and fill in:
 
-  Simplest of all: if your shell already has `http_proxy`/`https_proxy` set,
-  `PROXY=true` picks them up on its own and you need set nothing:
+     ```bash
+     # .env
+     HTTP_PROXY=http://proxy.example.com:3128
+     HTTPS_PROXY=http://proxy.example.com:3128
+     ```
 
-  ```bash
-  make up PROXY=true
-  ```
+  Because the keys are value-less rather than `${HTTP_PROXY:-}`, an unset
+  proxy is *omitted* from the container instead of injected as an empty
+  string — so option 1 keeps working even when you set nothing, and no
+  override file or extra `make` flag is required.
 
-  That fallback is deliberately gated on `PROXY=true`. Reading the ambient
-  proxy on every run would silently inject each developer's own proxy —
-  including host-only ones containers cannot reach — into runs that never
-  asked to be proxied. An explicit `KIOSK_HTTP_PROXY` always takes priority.
+  Use an address routable from inside a container. A loopback proxy
+  (`127.0.0.1`/`localhost`) is the container itself, not your host, and
+  downloads will hang; `make` warns if it detects one.
 
-  If `.env` was created before this behaviour was fixed it may still contain
-  the uncommented empty assignments; comment them out or fill them in. (The
-  `PROXY=true` fallback handles that case too — it treats an empty value as
-  unset.)
+  The same values are passed as **build args** to every locally built
+  service, so `make build REGISTRY=false` can reach the package mirrors —
+  `apt-get`/`pip`/`npm` run inside the builder, where the service-level
+  environment does not apply. `HTTP_PROXY`/`HTTPS_PROXY` are predefined build
+  args, so they need no `ARG` line and are not baked into the image.
 
-  Prefer this over running `docker compose -f docker-compose.yml -f
-  docker-compose.proxy.yml up -d` by hand: the `make` target also runs
-  `check-env` and keeps the identity/queue profile flags that `make up`
-  normally adds (queue services are on by default via `QUEUE=true`).
+  `make` mirrors each proxy variable across letter cases, so setting only
+  `HTTP_PROXY` is enough: `curl`, `wget` and `apt-get` read only the
+  lower-case names and would otherwise ignore it. Mirroring only ever fills a
+  *missing* counterpart. If you set both cases to different values, `make`
+  warns and tells you which one actually takes effect — the lower-case one,
+  for Python, `curl` and `wget` alike.
+
+  > **Deprecated:** `KIOSK_HTTP_PROXY` / `KIOSK_HTTPS_PROXY` (read by the
+  > removed `docker-compose.proxy.yml`, together with `make up PROXY=true`)
+  > are still applied, with a warning, if the standard names are unset.
+  > Rename them to `HTTP_PROXY` / `HTTPS_PROXY`; `PROXY=true` is now a no-op.
+
+  Never write `HTTP_PROXY=` with an empty value in `.env`. Empty is *not* the
+  same as unset: Compose injects the empty string, which suppresses the proxy
+  Docker would otherwise take from `~/.docker/config.json` — for **both**
+  letter cases. `export HTTP_PROXY=` behaves identically, and
+  `HTTP_PROXY= # optional` is worse still, because Compose does not strip the
+  comment and sets the proxy to the literal string `# optional`.
+  `make check-env` fails on all three.
+
+- **No egress and no proxy at all.** `make up` no longer starts a run that
+  cannot succeed. It probes huggingface.co from a container first and then
+  either switches to offline mode or stops:
+
+  | Probe | Caches | Result |
+  |---|---|---|
+  | reachable | — | starts online (unchanged) |
+  | unreachable | all 3 hold real weight files | starts with `HF_HUB_OFFLINE=1` automatically |
+  | unreachable | cold or incomplete | refuses to start, prints the probe result and the fix |
+  | not determinable | — | warns and continues (never blocks) |
+
+  Previously the stack came up and stalled for the full 600s dependency
+  timeout. The probe reports *why* it failed — a proxy returning `403`
+  (huggingface.co blocked by policy) is reported differently from no route at
+  all. A cache counts only if it contains an actual weight file over 1 MiB;
+  an empty `models--*/` directory or an interrupted download does not.
+
+  The probe runs in a container because a host `curl` says nothing about what
+  a container reaches through Docker's `proxies.default`. It uses **`curl`**,
+  and picks the probe image by whether it actually has `curl` or `wget` rather
+  than by name — two things matter here:
+
+  - huggingface.co's edge returns **`403 Forbidden` to busybox `wget`** even
+    when the network path is fine (verified on a host where `wget` got `403`
+    and `curl` got `200` over the same proxy). A wget-only `403` is therefore
+    reported as *inconclusive*, never as "unreachable".
+  - some service images ship neither `curl` nor `wget`, so probing with them
+    fails with `wget: not found`, which is indistinguishable from no egress.
+
+  An inconclusive probe drives **no** decision — it neither blocks startup nor
+  switches to offline mode, and `HF_HUB_OFFLINE` is left exactly as you set
+  it. Guessing "offline" is not a safe default: `optimum-cli export openvino`
+  must reach the Hub API to infer a model's task, so forcing offline on a host
+  that is actually online makes the first-run IR export fail and
+  audio-analyzer crash-loop.
+
+  This is also why the **converted IR volume** (`audio_analyzer_models`) is
+  what gets inspected, not just the Hugging Face source cache: cached source
+  weights are not sufficient for an offline start, because the conversion step
+  itself needs the Hub.
+
+  `HF_HUB_OFFLINE=1` is always honoured and never overridden; set
+  `HF_AUTO_OFFLINE=false` to restore the old warn-and-continue behaviour.
 
   Intra-cluster traffic always bypasses the proxy via the shared `NO_PROXY`
   anchor in `docker-compose.yml`.

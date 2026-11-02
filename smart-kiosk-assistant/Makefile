@@ -136,48 +136,100 @@ _RTSP_SOURCE_MODE      = $(if $(_RTSP_SOURCE_MODE_RAW),$(_RTSP_SOURCE_MODE_RAW),
 _RTSP_LIVE_ON          = $(filter live,$(_RTSP_SOURCE_MODE))
 _CAMERA_DEVICE_RAW     = $(strip $(CAMERA_DEVICE))
 _RTSP_CAMERA_DEVICE    = $(if $(_RTSP_LIVE_ON),$(_CAMERA_DEVICE_RAW),/dev/null)
-COMPOSE_BASE           = RTSP_SOURCE_MODE=$(_RTSP_SOURCE_MODE) RTSP_CAMERA_DEVICE=$(_RTSP_CAMERA_DEVICE) docker compose -f $(COMPOSE_FILE) $(_PROXY_FILE)
+COMPOSE_BASE           = RTSP_SOURCE_MODE=$(_RTSP_SOURCE_MODE) RTSP_CAMERA_DEVICE=$(_RTSP_CAMERA_DEVICE) docker compose -f $(COMPOSE_FILE)
 
-# PROXY=true appends the opt-in egress-proxy override, so proxied hosts get
-# check-env, the identity/queue profiles and the proxy settings in one command:
+# Egress proxy needs no Makefile support and no override file: docker-compose.yml
+# declares HTTP_PROXY/HTTPS_PROXY (both letter cases) as value-less keys, which
+# Compose resolves from the shell or .env and omits entirely when unset. See the
+# x-egress-proxy anchor there.
 #
-#   make up PROXY=true
-#
-# Running `docker compose -f docker-compose.yml -f docker-compose.proxy.yml up`
-# by hand works too, but skips check-env and drops the profile flags that
-# `make up` adds (queue services are on by default via QUEUE=true).
-PROXY       ?= false
-_PROXY_ON    = $(filter true,$(strip $(PROXY)))
-_PROXY_FILE  = $(if $(_PROXY_ON),-f docker-compose.proxy.yml,)
+# PROXY=true is still accepted so older docs and scripts keep working, but it is
+# now a no-op.
+PROXY ?= false
+ifneq (,$(filter true,$(strip $(PROXY))))
+$(info [proxy] PROXY=true is no longer needed: docker-compose.yml now passes HTTP_PROXY/HTTPS_PROXY through from your shell or .env automatically.)
+endif
 
-# With PROXY=true the caller has explicitly asked to be proxied, so falling
-# back to the shell's own proxy is intent rather than accident -- which is the
-# reason docker-compose.proxy.yml refuses to read HTTP_PROXY directly (doing so
-# would inject every developer's ambient proxy, including host-only ones
-# containers cannot reach, into runs that never asked for one).
+# Deprecated KIOSK_HTTP_PROXY / KIOSK_HTTPS_PROXY (the names the removed
+# docker-compose.proxy.yml read) are translated rather than ignored. A .env
+# carrying only those would otherwise lose egress silently -- the stack would
+# start with no proxy and stall on the first model download, which is exactly
+# the failure this whole change exists to prevent.
 #
-# An explicit KIOSK_HTTP_PROXY always wins. The test is `ifeq (,$(strip ...))`
-# rather than `?=` because a .env created before these assignments were
-# commented out still defines them as empty, which `?=` would treat as set.
-ifneq ($(_PROXY_ON),)
-ifeq ($(strip $(KIOSK_HTTP_PROXY)),)
-KIOSK_HTTP_PROXY := $(or $(http_proxy),$(HTTP_PROXY))
-_PROXY_DERIVED   := 1
+# Translate only into an UNSET counterpart so a host that has since moved to
+# the standard names is never overridden by a stale KIOSK_ value.
+ifneq (,$(strip $(KIOSK_HTTP_PROXY))$(strip $(KIOSK_HTTPS_PROXY)))
+$(warning [proxy] KIOSK_HTTP_PROXY/KIOSK_HTTPS_PROXY are deprecated. Rename them to HTTP_PROXY/HTTPS_PROXY in .env; they are being applied for now but support will be removed.)
+ifneq (,$(strip $(KIOSK_HTTP_PROXY)))
+ifeq (,$(strip $(HTTP_PROXY)))
+export HTTP_PROXY := $(strip $(KIOSK_HTTP_PROXY))
 endif
-ifeq ($(strip $(KIOSK_HTTPS_PROXY)),)
-KIOSK_HTTPS_PROXY := $(or $(https_proxy),$(HTTPS_PROXY),$(KIOSK_HTTP_PROXY))
 endif
-export KIOSK_HTTP_PROXY
-export KIOSK_HTTPS_PROXY
-# Never derive a proxy silently: it changes container egress, and a wrong value
-# surfaces as every model download hanging with no stated cause.
-ifdef _PROXY_DERIVED
-$(info [proxy] PROXY=true, using proxy from the shell: $(KIOSK_HTTP_PROXY))
-ifneq (,$(or $(findstring 127.0.0.1,$(KIOSK_HTTP_PROXY)),$(findstring localhost,$(KIOSK_HTTP_PROXY))))
-$(warning [proxy] $(KIOSK_HTTP_PROXY) is loopback: inside a container that is the container itself, not this host. Downloads will hang. Set KIOSK_HTTP_PROXY to a routable address.)
+ifneq (,$(strip $(KIOSK_HTTPS_PROXY)))
+ifeq (,$(strip $(HTTPS_PROXY)))
+export HTTPS_PROXY := $(strip $(KIOSK_HTTPS_PROXY))
+endif
+else
+# docker-compose.proxy.yml defaulted HTTPS to the HTTP value; preserve that.
+ifeq (,$(strip $(HTTPS_PROXY)))
+export HTTPS_PROXY := $(strip $(KIOSK_HTTP_PROXY))
 endif
 endif
 endif
+
+# Mirror each proxy variable across letter cases.
+#
+# Compose passes through exactly the names that are set, so setting only
+# HTTP_PROXY (the common case in .env) leaves http_proxy unset in the
+# container. Python's urllib/requests/httpx accept either, but curl, wget and
+# apt-get inside the containers and during image builds read ONLY the
+# lower-case names -- so an upper-case-only proxy silently fails to apply to
+# exactly the tools that fetch packages.
+#
+# `-include .env` + `export` above means these already carry any .env value.
+# Only ever fill in a MISSING counterpart; never overwrite one the caller set,
+# so an intentionally asymmetric configuration survives.
+_PROXY_PAIRS = http_proxy/HTTP_PROXY https_proxy/HTTPS_PROXY no_proxy/NO_PROXY
+$(foreach _p,$(_PROXY_PAIRS), \
+  $(eval _lc = $(word 1,$(subst /, ,$(_p)))) \
+  $(eval _uc = $(word 2,$(subst /, ,$(_p)))) \
+  $(if $(strip $($(_lc))),,$(if $(strip $($(_uc))),$(eval export $(_lc) := $($(_uc))))) \
+  $(if $(strip $($(_uc))),,$(if $(strip $($(_lc))),$(eval export $(_uc) := $($(_lc))))) \
+)
+
+# A loopback proxy is the single most common misconfiguration here: inside a
+# container 127.0.0.1 is the container itself, not this host, so every model
+# download and every apt-get hangs with no stated cause. Check BOTH the HTTP
+# and HTTPS proxies -- huggingface.co is HTTPS, so a loopback HTTPS_PROXY on
+# its own is enough to stall startup.
+define _warn_if_loopback
+$(if $(or $(findstring 127.0.0.1,$(1)),$(findstring localhost,$(1)),$(findstring ::1,$(1))),\
+$(warning [proxy] $(2)=$(1) is loopback: inside a container that is the container itself, not this host. Model downloads and apt-get will hang. Set it to an address routable from containers.))
+endef
+$(eval $(call _warn_if_loopback,$(strip $(http_proxy)),http_proxy))
+$(eval $(call _warn_if_loopback,$(strip $(https_proxy)),https_proxy))
+
+# Both letter cases set to DIFFERENT values for the same protocol. The mirror
+# above never creates this -- it only fills a missing counterpart -- so it can
+# only come from the caller: typically an uppercase project proxy in .env plus
+# a different ambient lowercase one inherited from the shell.
+#
+# Compose passes both through verbatim, and the consumers disagree about which
+# wins: Python (urllib/requests/httpx), curl and wget all prefer the LOWER-case
+# name. Silently preferring one is how a reachable project proxy ends up
+# unused, so say which one actually takes effect.
+define _warn_if_case_conflict
+$(if $(and $(strip $(1)),$(strip $(2))),$(if $(filter-out $(strip $(1)),$(strip $(2))),\
+$(warning [proxy] $(3)=$(strip $(1)) and $(4)=$(strip $(2)) disagree. Python, curl and wget all use the lower-case value ($(strip $(1))); the upper-case one is ignored by them. Set both to the same value, or unset one.)))
+endef
+$(eval $(call _warn_if_case_conflict,$(http_proxy),$(HTTP_PROXY),http_proxy,HTTP_PROXY))
+$(eval $(call _warn_if_case_conflict,$(https_proxy),$(HTTPS_PROXY),https_proxy,HTTPS_PROXY))
+
+# When huggingface.co is unreachable, `make up` switches to offline mode if the
+# model caches can serve the run, and refuses to start if they cannot (rather
+# than stalling for the full 600s dependency timeout). Set to false to restore
+# the previous warn-and-continue behaviour. See scripts/resolve-hf-offline.sh.
+HF_AUTO_OFFLINE ?= true
 
 # Services with fully local build contexts (built from source in this repo).
 # metrics-collector is NOT in this list: its source now lives in the
@@ -490,10 +542,24 @@ check-env: ## Validate .env and all required variables before running the stack
 			echo "    If the containers do have egress (for example a proxy configured in"; \
 			echo "    ~/.docker/config.json), ignore this and continue."; \
 			echo "    If they do not, audio-analyzer/text-to-speech will raise httpx.ConnectError"; \
-			echo "    at startup and never become healthy. Behind a proxy kept in .env, run:"; \
-			echo "      make up PROXY=true"; \
+			echo "    at startup and never become healthy. Behind a proxy, set HTTP_PROXY"; \
+			echo "    and HTTPS_PROXY in your shell or .env, then re-run make up."; \
 			echo "    See docs/user-guide/troubleshooting.md."; \
 		fi; \
+	fi; \
+	\
+	if [ -f .env ] && grep -qE '^[[:space:]]*(export[[:space:]]+)?(HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy)[[:space:]]*=[[:space:]]*(#.*)?$$' .env; then \
+		echo "  $(RED)✗ .env has a proxy assignment with no usable value$(NC)"; \
+		grep -nE '^[[:space:]]*(export[[:space:]]+)?(HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy)[[:space:]]*=[[:space:]]*(#.*)?$$' .env | sed 's/^/      line /'; \
+		echo "    An empty value is NOT the same as unset: Compose injects the empty"; \
+		echo "    string into the container, which suppresses the proxy Docker would"; \
+		echo "    otherwise take from ~/.docker/config.json and breaks model downloads"; \
+		echo "    (ITEP-97604). It suppresses BOTH letter cases, not just the one written."; \
+		echo "    'export VAR=' is parsed the same way."; \
+		echo "    A trailing comment is worse: Compose does NOT strip it, so"; \
+		echo "    'HTTP_PROXY= # optional' sets the proxy to the literal '# optional'."; \
+		echo "    Comment the line out, or give it a real value."; \
+		ERRORS=$$((ERRORS+1)); \
 	fi; \
 	\
 	if [ "$(_RTSP_SOURCE_MODE_RAW)" != "" ] && [ "$(_RTSP_SOURCE_MODE_RAW)" != "sample" ] && [ "$(_RTSP_SOURCE_MODE_RAW)" != "live" ]; then \
@@ -645,7 +711,17 @@ build: check-env ## Pull images (default with .env); REGISTRY=false builds local
 
 up: check-env setup-dirs clean-metrics ## Start all services
 	@echo "$(BLUE)Starting Smart Kiosk Assistant...$(NC)"
-	REGISTRY_REPO=$(_DOCKER_REGISTRY) $(COMPOSE_BASE) $(_IDENTITY_PROFILE) $(_QUEUE_PROFILE) up -d
+	@# Resolve HF offline mode before bringing anything up. Without egress and
+	@# without a warm cache, audio-analyzer/text-to-speech can never become
+	@# healthy and the whole stack aborts after the 600s dependency timeout --
+	@# so fail fast instead, or switch to offline automatically when the cache
+	@# can actually serve the run. See scripts/resolve-hf-offline.sh.
+	@set -e; \
+	HF_RESOLVED=$$(COMPOSE_PROJECT="$(_COMPOSE_PROJECT)" HF_AUTO_OFFLINE="$(HF_AUTO_OFFLINE)" \
+		./scripts/resolve-hf-offline.sh); \
+	REGISTRY_REPO=$(_DOCKER_REGISTRY) \
+	HF_HUB_OFFLINE="$$HF_RESOLVED" TRANSFORMERS_OFFLINE="$$HF_RESOLVED" \
+		$(COMPOSE_BASE) $(_IDENTITY_PROFILE) $(_QUEUE_PROFILE) up -d
 	@echo ""
 	@echo "$(GREEN)✓ Stack started$(NC)"
 	@echo "  Kiosk UI        → http://localhost:7860"
@@ -1259,3 +1335,4 @@ compare-profiles: ## Build results/matrix_summary.csv from every profile's resul
 	@python3 tests/benchmarks/compare_profiles.py \
 		--results-root $(RESULTS_ROOT) \
 		--output $(RESULTS_ROOT)/matrix_summary.csv
+
