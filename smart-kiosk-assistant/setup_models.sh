@@ -578,7 +578,8 @@ download_yolo26_model() {
     # Both the dynamic IR and its pre-generated static variant must be present
     # so the container can skip the runtime reshape step entirely.
     if [ -f "${xml_path}" ] && [ -f "${bin_path}" ] && \
-       [ -f "${static_xml}" ] && [ -f "${static_bin}" ]; then
+       [ -f "${static_xml}" ] && [ -f "${static_bin}" ] && \
+       [ ! "${xml_path}" -nt "${static_xml}" ]; then
         echo "  ✓ ${YOLO26_MODEL_NAME} IR already present — skipping download/export"
         return 0
     fi
