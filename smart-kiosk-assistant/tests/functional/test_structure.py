@@ -702,6 +702,60 @@ class TestRtspStreamerSurfacesMediamtxFailure:
             "polling a dead process until the retry budget runs out"
         )
 
+    @pytest.mark.tier1
+    def test_mediamtx_does_not_depend_on_a_writable_workdir(self):
+        """mediamtx must run from a writable dir with an explicit config path.
+
+        ITEP-97604: mediamtx >=v1.20.0 added a native MoQ/QUIC listener that
+        writes auto.key/auto.crt into its *working directory* on every start.
+        docker-compose runs this container as uid 1000, so on an image whose
+        WORKDIR is root-owned the write fails and mediamtx aborts with
+        "unable to load TLS keypair", closing every listener including RTSP.
+        Relying on the WORKDIR for config discovery is what pins the CWD to
+        that unwritable directory, so both dependencies must go together.
+        """
+        assert "MEDIAMTX_RUN_DIR" in self._START_SH, (
+            "start.sh must run mediamtx from an explicitly writable directory "
+            "so MoQ TLS material can be generated regardless of image ownership"
+        )
+        assert 'cd "$MEDIAMTX_RUN_DIR" && exec "$MEDIAMTX_BIN" "$MEDIAMTX_CONFIG"' in (
+            self._START_SH
+        ), (
+            "mediamtx must be launched from MEDIAMTX_RUN_DIR with an explicit "
+            "config path; `exec` keeps $! pointing at mediamtx itself so the "
+            "liveness check above still works"
+        )
+        assert '"$MEDIAMTX_BIN" >/tmp/mediamtx.log 2>&1 &' in self._START_SH, (
+            "the historical invocation must remain as a fallback for images "
+            "that lay the config out differently"
+        )
+
+    @pytest.mark.tier1
+    def test_relative_overrides_are_anchored_before_the_cd(self):
+        """A relative MEDIAMTX_BIN/MEDIAMTX_CONFIG must survive the cd.
+
+        Both values are validated against the *current* directory (`[ -x ]`
+        near the top of the script, `[ -f ]` at the launch site). Changing
+        directory afterwards silently re-resolves a relative override under
+        MEDIAMTX_RUN_DIR, so mediamtx exits immediately even though the files
+        exist where the user pointed at them. Verified by reproduction:
+        MEDIAMTX_CONFIG=mediamtx.yml and MEDIAMTX_BIN=./mediamtx both exit 1
+        without this anchoring.
+        """
+        launch = self._START_SH.split("Starting mediamtx RTSP server", 1)[1]
+        for var in ("MEDIAMTX_BIN", "MEDIAMTX_CONFIG"):
+            assert f'{var}="$(pwd)/${var}"' in launch, (
+                f"a relative {var} must be anchored to the original working "
+                "directory before cd-ing to MEDIAMTX_RUN_DIR"
+            )
+        # A bare executable name (no slash) must stay untouched so PATH lookup,
+        # which is CWD-independent, still resolves it.
+        bin_case = launch.split('case "$MEDIAMTX_BIN" in', 1)[1].split("esac", 1)[0]
+        assert "*/*)" in bin_case, (
+            "only slash-containing MEDIAMTX_BIN values may be rewritten; a "
+            "bare name must be left for PATH lookup"
+        )
+
 
 class TestSetupModelsNeutralisesStaleGpuPins:
     """setup_models.sh must reconcile stale per-service GPU pins in .env.
