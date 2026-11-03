@@ -27,6 +27,7 @@ from kiosk_core.ordering.repository import (
     SqliteProductRepository,
 )
 from kiosk_core.ordering.upsell import UpsellEngine
+from kiosk_core.qsr_mcp.agent_tools import upsell_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -709,6 +710,9 @@ class OrderingService:
 
     async def get_upsell_suggestions(self, request: UpsellRequest) -> list[UpsellSuggestion]:
         """Return rule-based upsell suggestions for the given cart."""
+        # The QSR agent's update_kiosk_settings(upsell_enabled=False) turns upsell prompts off.
+        if not upsell_enabled():
+            return []
         async with get_db() as db:
             prod_repo = SqliteProductRepository(db)
             all_products_list = await prod_repo.list_all()

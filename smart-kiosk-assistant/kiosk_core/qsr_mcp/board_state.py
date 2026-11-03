@@ -31,6 +31,7 @@ _lock = threading.Lock()
 _state: dict[str, Any] = {"mode": "full", "reason": None, "updated_at": None}
 _path: Path | None = None
 _loaded = False
+_mtime_ns: int | None = None
 
 
 def configure(path: str) -> None:
@@ -38,13 +39,15 @@ def configure(path: str) -> None:
 
     Safe to call more than once (e.g. in tests) — reloads from ``path``.
     """
-    global _path, _state, _loaded  # noqa: PLW0603
+    global _path, _state, _loaded, _mtime_ns  # noqa: PLW0603
     with _lock:
         _path = Path(path)
         _path.parent.mkdir(parents=True, exist_ok=True)
+        _mtime_ns = None
         if _path.exists():
             try:
                 _state = json.loads(_path.read_text(encoding="utf-8"))
+                _mtime_ns = _path.stat().st_mtime_ns
             except (json.JSONDecodeError, OSError) as exc:
                 logger.warning("[BoardState] Could not read %s, starting fresh: %s", _path, exc)
                 _state = {"mode": "full", "reason": None, "updated_at": None}
@@ -57,6 +60,41 @@ def get() -> dict[str, Any]:
         return dict(_state)
 
 
+def get_fresh(path: str) -> dict[str, Any]:
+    """Like ``get`` but re-reads the state file when another process changed it.
+
+    The ordering service runs in a different process from the standalone QSR MCP
+    server, so it must not rely on its own cached copy. ``path`` is used when
+    ``configure`` was never called in this process.
+    """
+    global _path, _state, _mtime_ns  # noqa: PLW0603
+    with _lock:
+        if _path is None:
+            _path = Path(path)
+        try:
+            mtime_ns = _path.stat().st_mtime_ns
+        except OSError:
+            return dict(_state)
+        if mtime_ns != _mtime_ns:
+            try:
+                _state = json.loads(_path.read_text(encoding="utf-8"))
+                _mtime_ns = mtime_ns
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.warning("[BoardState] Could not refresh from %s: %s", _path, exc)
+        return dict(_state)
+
+
+def _persist(snapshot: dict[str, Any]) -> None:
+    global _mtime_ns  # noqa: PLW0603
+    if _path is None:
+        return
+    try:
+        write_json_atomic(_path, snapshot)
+        _mtime_ns = _path.stat().st_mtime_ns
+    except OSError as exc:
+        logger.warning("[BoardState] Could not persist state to %s: %s", _path, exc)
+
+
 def set_mode(mode: str, reason: str | None = None) -> dict[str, Any]:
     """Set the board mode. Raises ``ValueError`` for an unknown mode."""
     if mode not in VALID_MODES:
@@ -66,9 +104,19 @@ def set_mode(mode: str, reason: str | None = None) -> dict[str, Any]:
         _state["reason"] = reason
         _state["updated_at"] = time.time()
         snapshot = dict(_state)
-        if _path is not None:
-            try:
-                write_json_atomic(_path, snapshot)
-            except OSError as exc:
-                logger.warning("[BoardState] Could not persist state to %s: %s", _path, exc)
+        _persist(snapshot)
+    return snapshot
+
+
+def update_settings(reason: str | None = None, **settings: Any) -> dict[str, Any]:
+    """Persist kiosk operating settings (``active_kiosks``, ``upsell_enabled``)."""
+    unknown = set(settings) - {"active_kiosks", "upsell_enabled"}
+    if unknown:
+        raise ValueError(f"unknown kiosk settings: {', '.join(sorted(unknown))}")
+    with _lock:
+        _state.update(settings)
+        _state["settings_reason"] = reason
+        _state["settings_updated_at"] = time.time()
+        snapshot = dict(_state)
+        _persist(snapshot)
     return snapshot

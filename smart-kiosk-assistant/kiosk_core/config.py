@@ -1181,6 +1181,14 @@ QSR_AUTONOMY_QUEUE_MIN_DELTA = int(
     os.getenv("KIOSK_CORE_QSR_AUTONOMY_QUEUE_MIN_DELTA", "1")
 )
 
+# Kiosk operating settings the QSR agent reads in get_kiosk_context and changes
+# with update_kiosk_settings (kiosk_core/qsr_mcp/agent_tools.py).
+QSR_RESTAURANT_NAME = os.getenv("KIOSK_CORE_QSR_RESTAURANT_NAME", "")
+QSR_MAX_KIOSKS = int(os.getenv("KIOSK_CORE_QSR_MAX_KIOSKS", "4"))
+QSR_ACTIVE_KIOSKS = int(os.getenv("KIOSK_CORE_QSR_ACTIVE_KIOSKS", "3"))
+# Average minutes one kiosk takes per order; estimated wait = queue x this / active kiosks.
+QSR_MINUTES_PER_ORDER = float(os.getenv("KIOSK_CORE_QSR_MINUTES_PER_ORDER", "2.0"))
+
 # ---------------------------------------------------------------------------
 # Conversation recording (offline analysis)
 # ---------------------------------------------------------------------------

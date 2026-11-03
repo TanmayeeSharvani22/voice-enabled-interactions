@@ -322,6 +322,36 @@ retries — resending a payload the agent refuses to parse cannot succeed.
 | `KIOSK_CORE_QSR_AUTONOMY_TIMEOUT_SECONDS` | `5.0` | Per-request timeout |
 | `KIOSK_CORE_QSR_EXTRA_NO_PROXY` | *(empty)* | Appended to kiosk-core's `NO_PROXY`. **Required behind a corporate proxy**, since the agent runs on another machine. Python's `urllib` matches `no_proxy` by suffix, *not* CIDR — list the host name or exact IP. |
 
+## QSR agent contract (`agent_tools.py`)
+
+The Central QSR Agent's built-in `kiosk` capability uses three tools that map its
+contract onto this kiosk's real state. Point the agent at this surface with
+`QSR_KIOSK_MCP_URL=http://<kiosk-host>:8014/mcp`; it then replaces the agent's
+local kiosk simulation.
+
+| Tool | Kind | Behaviour |
+|---|---|---|
+| `get_kiosk_context` | read | `restaurant.id` (`KIOSK_CORE_QSR_AUTONOMY_STORE_ID`), `menu.items[]` from the catalogue (`id` = `product_id`, `available`), queue count/status from queue-service, `estimated_wait_minutes`, settings (`kiosk_mode`, `active_kiosks`, `max_kiosks`, `upsell_enabled`), confirmed orders in the last 15 minutes, `observed_at` |
+| `change_menu_items` | act | Up to three `{item_id, available, reason}` changes, each through the `update_menu_item` gate |
+| `update_kiosk_settings` | act (automatic, 20 calls/60s) | `mode` `standard`/`express` sets the board to `full`/`simplified`; `upsell_enabled=false` makes the upsell engine return no suggestions; `active_kiosks` (1..`max_kiosks`) is stored and used for the wait estimate. Emits `kiosk_settings_changed` |
+
+The agent proposes these actions and calls them only after an operator approves.
+Forwarded events carry `"service": "kiosk"`; `queue_count_changed` also carries
+`previous_queue_count` and `estimated_wait_minutes`.
+
+With a live agent, set `KIOSK_CORE_QSR_AUTONOMY_EVENT_TYPES=queue_depth_sample`:
+otherwise each board change the agent applies comes back to it as a
+`board_mode_changed` event, and every forwarded event costs a model call. Lower
+`KIOSK_CORE_QSR_MCP_QUEUE_POLL_SECONDS` (default 30) for faster reaction. After
+restarting kiosk-core, restart the agent so it reconnects to this MCP surface.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `KIOSK_CORE_QSR_RESTAURANT_NAME` | *(empty)* | Optional `restaurant.name` |
+| `KIOSK_CORE_QSR_MAX_KIOSKS` | `4` | Upper bound for `active_kiosks` |
+| `KIOSK_CORE_QSR_ACTIVE_KIOSKS` | `3` | Initial `active_kiosks` |
+| `KIOSK_CORE_QSR_MINUTES_PER_ORDER` | `2.0` | Wait estimate = queue × this ÷ active kiosks |
+
 ## Configuration
 
 See `kiosk_core/config.py` (`QSR_MCP_*` and `QSR_AUTONOMY_*` constants) /

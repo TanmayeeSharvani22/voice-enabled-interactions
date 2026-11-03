@@ -78,6 +78,22 @@ class PolicyGate:
 
         return PolicyDecision(True, GateLevel.AUTOMATIC, "auto-approved")
 
+    def check_capacity(self, action_name: str, calls: int) -> PolicyDecision | None:
+        """Refuse up front when ``calls`` more runs would exceed the rate limit.
+
+        Lets a multi-call bundle be all-or-nothing instead of stopping part-way.
+        Returns ``None`` when the bundle fits. Does not consume any allowance.
+        """
+        spec = self._actions.get(action_name)
+        if spec is None or spec.max_calls is None:
+            return None
+        window_start = time.monotonic() - spec.per_seconds
+        while spec._calls and spec._calls[0] < window_start:
+            spec._calls.popleft()
+        if len(spec._calls) + calls > spec.max_calls:
+            return PolicyDecision(False, spec.level, "rate limit exceeded")
+        return None
+
     def _within_rate_limit(self, spec: ActionSpec) -> bool:
         if spec.max_calls is None:
             return True
