@@ -673,6 +673,33 @@ class TestTargetDeviceDrivesEveryService:
         )
 
 
+class TestRtspStreamerSurfacesMediamtxFailure:
+    """rtsp-streamer must explain why mediamtx refused to start.
+
+    ITEP-97604: mediamtx's output is redirected to /tmp/mediamtx.log inside the
+    container, so a start failure produced only a generic "RTSP server failed
+    to start" line every ~12s forever. The real cause died with the container.
+    """
+
+    _START_SH = (_KIOSK_ROOT / "rtsp-streamer" / "start.sh").read_text()
+
+    @pytest.mark.tier1
+    def test_failure_path_dumps_the_mediamtx_log(self):
+        assert "dump_mediamtx_log" in self._START_SH, (
+            "start.sh must dump /tmp/mediamtx.log when mediamtx fails to "
+            "bind the RTSP port, or the cause is unrecoverable"
+        )
+        assert "tail -n 50 /tmp/mediamtx.log" in self._START_SH
+
+    @pytest.mark.tier1
+    def test_dead_mediamtx_is_detected_immediately(self):
+        """Don't burn the full 10s timeout on a process that already exited."""
+        assert 'kill -0 "$mediamtx_pid"' in self._START_SH, (
+            "the readiness loop must notice mediamtx has exited instead of "
+            "polling a dead process until the retry budget runs out"
+        )
+
+
 class TestSetupModelsNeutralisesStaleGpuPins:
     """setup_models.sh must reconcile stale per-service GPU pins in .env.
 

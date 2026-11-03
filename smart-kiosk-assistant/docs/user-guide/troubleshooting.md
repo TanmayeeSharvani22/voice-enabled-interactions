@@ -225,6 +225,42 @@ RAG LLM compile on GPU can also take a few minutes the first time.
   docker compose logs <service-name>
   ```
 
+## `rtsp-streamer` Never Becomes Healthy
+
+`queue-service` reports `dependency failed to start: container rtsp-streamer
+is unhealthy`, and `rtsp-streamer` logs the same block every ~12 s:
+
+```
+[rtsp-streamer] Starting mediamtx RTSP server on port 8554 ...
+[rtsp-streamer] mediamtx started (PID=18)
+[rtsp-streamer] Waiting for mediamtx to accept connections on port 8554 ...
+[rtsp-streamer] ERROR RTSP server failed to start on port 8554
+```
+
+The embedded MediaMTX server exited instead of binding port 8554. `start.sh`
+now prints MediaMTX's own output immediately after that error:
+
+```
+[rtsp-streamer] ERROR mediamtx (PID=14) exited before accepting connections on port 8554
+[rtsp-streamer] ----- mediamtx log (last 50 lines) -----
+ERR: yaml: mapping values are not allowed in this context
+[rtsp-streamer] ----- end mediamtx log -----
+```
+
+Read that block for the real cause — typically an unreadable or malformed
+`rtsp-streamer/mediamtx.yml`, or port `8554` already in use on the host.
+
+```bash
+docker compose logs --no-color rtsp-streamer | tail -40
+ss -ltnp | grep 8554          # is something else holding the port?
+```
+
+If you see no `mediamtx log` block at all, you are running an older image —
+rebuild with `docker compose build rtsp-streamer`. `mediamtx.yml` and
+`start.sh` are bind-mounted, so a rebuild is usually unnecessary for those
+two files alone. Not needed at all when `QUEUE=false`: run `make up
+QUEUE=false` to skip `rtsp-streamer` and `queue-service` entirely.
+
 ## A Service Crash-Loops with `[GPU] Context was not initialized for 0 device`
 
 A service (most often `audio-analyzer`, but also `rag-service` or
