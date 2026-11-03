@@ -91,6 +91,8 @@ def _catalogue() -> tuple[list[dict[str, Any]], dict[str, Any]]:
 def kiosk_context(service: ModuleType) -> dict[str, Any]:
     client = service.get_queue_client()
     snapshot = client.get_queue_snapshot() if client is not None else None
+    if snapshot is not None and service.stale_queue_reason(snapshot):
+        snapshot = None
     count = snapshot.get("count") if snapshot else None
     items, activity = _catalogue()
     current = settings()

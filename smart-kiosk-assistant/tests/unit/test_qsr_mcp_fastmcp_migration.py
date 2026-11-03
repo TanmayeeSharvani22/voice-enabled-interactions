@@ -713,3 +713,57 @@ def test_the_queue_poller_survives_a_missing_client(monkeypatch):
 
     with pytest.raises(StopPolling):
         mcp_server._poll_queue_forever(0)
+
+
+def test_the_queue_poller_skips_readings_from_a_stalled_camera(monkeypatch):
+    """queue-service keeps returning its last count when frames stop; that
+    count must not be logged or forwarded as the current queue."""
+    import time
+
+    from kiosk_core.qsr_mcp import mcp_server
+
+    class StopPolling(BaseException):
+        """Not an Exception: the loop deliberately swallows those."""
+
+    now = time.time()
+    readings = iter([
+        {"count": 9, "nearby": 0, "status": "HIGH", "timestamp": now - 600},
+        {"count": 4, "nearby": 0, "status": "MEDIUM", "timestamp": now},
+    ])
+
+    class Client:
+        def get_queue_snapshot(self):
+            try:
+                return next(readings)
+            except StopIteration:
+                raise StopPolling from None
+
+    emitted = []
+    monkeypatch.setattr(mcp_server, "get_queue_client", lambda: Client())
+    monkeypatch.setattr(mcp_server, "emit_queue_sample", emitted.append)
+    monkeypatch.setattr(mcp_server.time, "sleep", lambda _: None)
+
+    with pytest.raises(StopPolling):
+        mcp_server._poll_queue_forever(0)
+
+    assert [reading["count"] for reading in emitted] == [4]
+
+
+def test_stale_queue_reason_flags_only_old_readings(qsr_env):
+    import time
+
+    assert qsr_env.stale_queue_reason({"count": 3, "timestamp": time.time()}) is None
+    assert qsr_env.stale_queue_reason({"count": 3}) is None
+    assert "no camera frame" in qsr_env.stale_queue_reason({"count": 3, "timestamp": time.time() - 600})
+
+
+def test_init_resumes_queue_change_detection_from_the_log(qsr_env, monkeypatch):
+    """A restart must not turn the unchanged queue into a new agent event."""
+    mcp_service = qsr_env
+    mcp_service.emit_queue_sample({"count": 12, "nearby": 1, "status": "HIGH"})
+    monkeypatch.setattr(mcp_service.cfg, "QSR_AUTONOMY_EVENTS_URL", "http://agent/autonomy/events")
+
+    mcp_service.init(force=True)
+
+    sink = mcp_service._autonomy_delivery.sinks[0]
+    assert sink._last_queue_count == 12

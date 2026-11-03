@@ -34,6 +34,7 @@ from kiosk_core.qsr_mcp.mcp_service import (
     get_queue_client,
     init,
     mcp,
+    stale_queue_reason,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,7 @@ def _poll_queue_forever(interval_seconds: float) -> None:
         logger.info("[QSR-MCP] Queue-service disabled; queue poller not started")
         return
     logger.info("[QSR-MCP] Queue poller started (interval=%.1fs)", interval_seconds)
+    stale_logged = False
     while True:
         # The poller owns a daemon thread with no supervisor, so an escaping
         # exception would kill queue history silently and permanently. Treat
@@ -93,7 +95,15 @@ def _poll_queue_forever(interval_seconds: float) -> None:
             queue_client = get_queue_client()
             if queue_client is not None:
                 snapshot = queue_client.get_queue_snapshot()
-                if snapshot is not None:
+                stale = stale_queue_reason(snapshot) if snapshot is not None else None
+                if stale:
+                    # A stalled camera keeps returning its last count; logging
+                    # it would record a queue nobody is observing.
+                    if not stale_logged:
+                        logger.warning("[QSR-MCP] Skipping queue samples: %s", stale)
+                    stale_logged = True
+                elif snapshot is not None:
+                    stale_logged = False
                     emit_queue_sample(snapshot)
             # A missing client is skipped, not returned on: returning would
             # end the thread for good, so queue history would stop growing
