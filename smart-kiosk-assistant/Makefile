@@ -658,6 +658,7 @@ up: check-env setup-dirs clean-metrics ## Start all services
 	@# can actually serve the run. See scripts/resolve-hf-offline.sh.
 	@set -e; \
 	HF_RESOLVED=$$(COMPOSE_PROJECT="$(_COMPOSE_PROJECT)" HF_AUTO_OFFLINE="$(HF_AUTO_OFFLINE)" \
+		REGISTRY_REPO="$(_DOCKER_REGISTRY)" RELEASE_TAG="$(RELEASE_TAG)" \
 		./scripts/resolve-hf-offline.sh); \
 	REGISTRY_REPO=$(_DOCKER_REGISTRY) \
 	HF_HUB_OFFLINE="$$HF_RESOLVED" TRANSFORMERS_OFFLINE="$$HF_RESOLVED" \

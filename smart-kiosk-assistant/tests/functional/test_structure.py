@@ -560,3 +560,34 @@ class TestSingleHuggingFaceProbe:
         assert resolver.count("audio_analyzer_models text_to_speech_cache") == 1, (
             "the cache volume list must not be duplicated"
         )
+
+    @pytest.mark.tier1
+    def test_both_callers_pass_the_same_effective_registry(self):
+        """`check-env` and `up` must probe the same images.
+
+        The resolver picks its probe image from
+        ``$REGISTRY_REPO/<service>:$RELEASE_TAG``. If only one caller passes
+        the effective registry, ``make up REGISTRY=private.example/team``
+        makes check-env probe the custom images while `up` falls back to
+        whatever REGISTRY_REPO happens to be in .env -- so the two can reach
+        opposite conclusions about the very same host.
+        """
+        makefile = (_KIOSK_ROOT / "Makefile").read_text()
+
+        invocations = [
+            block
+            for block in makefile.split("./scripts/resolve-hf-offline.sh")[:-1]
+        ]
+        assert len(invocations) == 2, (
+            "expected exactly two resolver invocations (check-env and up), "
+            f"found {len(invocations)}"
+        )
+
+        for block in invocations:
+            # Only the environment assignments immediately preceding the call.
+            env = block[-400:]
+            for var in ("REGISTRY_REPO=", "RELEASE_TAG="):
+                assert var in env, (
+                    f"every resolve-hf-offline.sh invocation must pass {var} "
+                    "so check-env and up select the same probe image"
+                )

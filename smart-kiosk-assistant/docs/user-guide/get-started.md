@@ -300,14 +300,18 @@ make up
 
 Option B builds `kiosk-core`, `rag-service`, `kiosk-ui`, `rtsp-streamer` and
 `queue-service` from source (10–20 minutes the first time). `audio-analyzer`
-and `text-to-speech` live in the sibling `edge-ai-libraries` repository and
-`ovms-llm` is an upstream image, so those are always pulled.
+and `text-to-speech` live in the sibling `edge-ai-libraries` repository, so
+`REGISTRY=false` does not rebuild them: an image already present locally under
+the selected registry and tag is kept as-is (it may be your own source build
+from `edge-ai-libraries`), and only a missing one is pulled. `ovms-llm` is
+always an upstream image.
 
-To confirm what you are actually running:
+To confirm what you are actually running — this reads the live container, so it
+stays correct whichever registry and tag you selected:
 
 ```bash
 make show-config                # prints REGISTRY, the compose image prefix, and RELEASE_TAG
-docker image inspect intel/kiosk-core:latest --format '{{.Created}}'
+docker inspect kiosk-core --format '{{.Config.Image}} (image ID: {{.Image}})'
 ```
 
 > `RELEASE_TAG` in `.env` must match the Makefile default (`RELEASE_TAG ?= latest`)
