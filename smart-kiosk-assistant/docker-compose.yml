@@ -412,7 +412,10 @@ services:
       # silently stays disabled).
       # Do NOT set ASR_DEVICE=NPU while models.asr.name is distil-small.en —
       # that combination is confirmed to corrupt output on this stack.
-      AUDIO_ANALYZER__MODELS__ASR__DEVICE: ${ASR_DEVICE:-GPU}
+      # Falls back to TARGET_DEVICE so a CPU-only host needs a single switch
+      # (TARGET_DEVICE=CPU) instead of remembering every per-service var.
+      # ASR_DEVICE still wins when set, so benchmark profiles are unaffected.
+      AUDIO_ANALYZER__MODELS__ASR__DEVICE: ${ASR_DEVICE:-${TARGET_DEVICE:-GPU}}
       # ASR model override — paired with ASR_DEVICE because the two are not
       # independent: distil-small.en corrupts output on NPU (see above), so a
       # device-combination benchmark profile that selects ASR_DEVICE=NPU must
@@ -424,8 +427,11 @@ services:
       # Preview (partial/streaming) ASR pool device. Distinct from the
       # final-commit pool above — config.yaml carries models.asr.preview.device
       # separately. Falls back to ASR_DEVICE so a profile only has to set one
-      # variable unless it deliberately splits the two pools.
-      AUDIO_ANALYZER__MODELS__ASR__PREVIEW__DEVICE: ${ASR_PREVIEW_DEVICE:-${ASR_DEVICE:-CPU}}
+      # variable unless it deliberately splits the two pools, then to
+      # TARGET_DEVICE so both ASR pools land on the same device by default —
+      # without the last link a CPU preview would silently pair with a
+      # GPU final-commit pool once ASR_DEVICE is left unpinned.
+      AUDIO_ANALYZER__MODELS__ASR__PREVIEW__DEVICE: ${ASR_PREVIEW_DEVICE:-${ASR_DEVICE:-${TARGET_DEVICE:-GPU}}}
       # Diarization device. Loaded via torch.device(<value>) — PyTorch has no
       # "gpu" string (Intel GPU would need "xpu", which this component does not
       # wire), so CPU is the only valid value today. Exposed anyway so a
@@ -629,17 +635,22 @@ services:
       # Set AGENT_COMPACT_TOOL_DESCRIPTIONS=false to revert with a restart.
       AGENT_COMPACT_TOOL_DESCRIPTIONS: ${AGENT_COMPACT_TOOL_DESCRIPTIONS:-true}
       # Embedding + reranker models are loaded in-process via OpenVINO at
-      # startup. These are intentionally decoupled from TARGET_DEVICE (which
-      # only controls the ovms-llm container): both models are exported by
-      # optimum-intel with dynamic (unbounded) sequence-length shapes, which
-      # the NPU compiler rejects ("Missing upper bound for one or more
-      # nodes"). NPU is not a supported value here — use CPU or GPU. CPU is
-      # normally fast enough for embedding/reranking; GPU is the default to
-      # match prior behavior. Override independently via RAG_EMBEDDING_DEVICE
-      # / RAG_RERANKER_DEVICE so environments without a GPU (e.g. CI runners)
-      # don't crash on startup with "[GPU] no supported devices found".
-      SMART_KIOSK_RAG__MODELS__EMBEDDING__DEVICE: ${RAG_EMBEDDING_DEVICE:-GPU}
-      SMART_KIOSK_RAG__RETRIEVAL__RERANKER__DEVICE: ${RAG_RERANKER_DEVICE:-GPU}
+      # startup. Both are exported by optimum-intel with dynamic (unbounded)
+      # sequence-length shapes, which the NPU compiler rejects ("Missing
+      # upper bound for one or more nodes"). NPU is not a supported value
+      # here — use CPU or GPU. CPU is normally fast enough for embedding/
+      # reranking; GPU remains the default to match prior behavior.
+      # These follow TARGET_DEVICE so a GPU-less host (e.g. a CI runner) does
+      # not crash on startup with "[GPU] no supported devices found"; override
+      # independently via RAG_EMBEDDING_DEVICE / RAG_RERANKER_DEVICE, which
+      # take precedence over TARGET_DEVICE when set.
+      SMART_KIOSK_RAG__MODELS__EMBEDDING__DEVICE: ${RAG_EMBEDDING_DEVICE:-${TARGET_DEVICE:-GPU}}
+      SMART_KIOSK_RAG__RETRIEVAL__RERANKER__DEVICE: ${RAG_RERANKER_DEVICE:-${TARGET_DEVICE:-GPU}}
+      # Only consulted when models.llm.backend is "openvino"; with the default
+      # "ovms" backend the LLM runs in the ovms-llm container instead. Chained
+      # anyway so switching backends on a CPU-only host does not reintroduce
+      # the "[GPU] Context was not initialized" startup crash.
+      SMART_KIOSK_RAG__MODELS__LLM__DEVICE: ${RAG_LLM_DEVICE:-${TARGET_DEVICE:-GPU}}
       # Retrieval recall knobs. Defaults live in rag-service/config.yaml and
       # are calibrated against the QuickBite KB; override per-deployment when
       # the knowledge base changes materially, since the reranker's logit
@@ -1185,7 +1196,7 @@ services:
       IDENTITY_DB_PATH:          /app/data/kiosk.db
       IDENTITY_FAISS_DIR:        /app/data/identity
       IDENTITY_MODELS_DIR:       /app/models
-      IDENTITY_DEVICE:           "${IDENTITY_DEVICE:-GPU}"
+      IDENTITY_DEVICE:           "${IDENTITY_DEVICE:-${TARGET_DEVICE:-GPU}}"
       IDENTITY_CONFIG_YAML:      /app/configs/identity/identity_config.yaml
       IDENTITY_PROMPTS_YAML:     /app/configs/identity/verification_prompts.yaml
       # Required for Level Zero to enumerate the Intel NPU. Harmless when no

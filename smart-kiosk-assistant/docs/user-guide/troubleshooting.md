@@ -225,6 +225,110 @@ RAG LLM compile on GPU can also take a few minutes the first time.
   docker compose logs <service-name>
   ```
 
+## `rtsp-streamer` Never Becomes Healthy
+
+`queue-service` reports `dependency failed to start: container rtsp-streamer
+is unhealthy`, and `rtsp-streamer` logs the same block every ~12 s:
+
+```
+[rtsp-streamer] Starting mediamtx RTSP server on port 8554 ...
+[rtsp-streamer] mediamtx started (PID=18)
+[rtsp-streamer] Waiting for mediamtx to accept connections on port 8554 ...
+[rtsp-streamer] ERROR RTSP server failed to start on port 8554
+```
+
+The embedded MediaMTX server exited instead of binding port 8554. `start.sh`
+now prints MediaMTX's own output immediately after that error:
+
+```
+[rtsp-streamer] ERROR mediamtx (PID=14) exited before accepting connections on port 8554
+[rtsp-streamer] ----- mediamtx log (last 50 lines) -----
+ERR: yaml: mapping values are not allowed in this context
+[rtsp-streamer] ----- end mediamtx log -----
+```
+
+Read that block for the real cause — typically an unreadable or malformed
+`rtsp-streamer/mediamtx.yml`, or port `8554` already in use on the host.
+
+```bash
+docker compose logs --no-color rtsp-streamer | tail -40
+ss -ltnp | grep 8554          # is something else holding the port?
+```
+
+If you see no `mediamtx log` block at all, you are running an older image —
+rebuild with `docker compose build rtsp-streamer`. `mediamtx.yml` and
+`start.sh` are bind-mounted, so a rebuild is usually unnecessary for those
+two files alone. Not needed at all when `QUEUE=false`: run `make up
+QUEUE=false` to skip `rtsp-streamer` and `queue-service` entirely.
+
+## A Service Crash-Loops with `[GPU] Context was not initialized for 0 device`
+
+A service (most often `audio-analyzer`, but also `rag-service` or
+`identity-service`) restarts forever, and its logs show:
+
+```
+Configured OpenVINO ASR device 'GPU' is not visible in this runtime.
+OpenVINO available_devices=['CPU']
+...
+Check 'contexts.count(device_id)' failed ... [GPU] Context was not initialized for 0 device
+ERROR:    Application startup failed. Exiting.
+```
+
+The service is pinned to `GPU` on a host where OpenVINO™ cannot use one. This
+happens even when `/dev/dri` exists — the node being present does not mean the
+GPU compute runtime is usable.
+
+**Fix:** run `make setup-models TARGET_DEVICE=CPU`. This switches the whole
+stack to CPU in one step — it sets `TARGET_DEVICE` and comments out any
+per-service `*_DEVICE` variable still pinned to `GPU`:
+
+```
+✓ TARGET_DEVICE updated  → CPU
+✓ ASR_DEVICE=GPU commented out (it would have overridden TARGET_DEVICE=CPU)
+✓ RAG_EMBEDDING_DEVICE=GPU commented out (it would have overridden TARGET_DEVICE=CPU)
+```
+
+Confirm with `make check-env`, which prints the effective device per service
+and names anything still pinned. On a host with no GPU render node this is a
+hard error, so `make up` cannot proceed into a crash-loop:
+
+```
+✗ TARGET_DEVICE=CPU but these override(s) still pin GPU: ASR_DEVICE RAG_EMBEDDING_DEVICE
+  A per-service *_DEVICE value takes precedence over TARGET_DEVICE, and this
+  host has no GPU render node, so each pinned service will crash-loop with
+  '[GPU] Context was not initialized for 0 device'.
+```
+
+On a host that *does* have a usable GPU the same situation is only a warning,
+since pinning one service to GPU while the rest run on CPU is a legitimate
+mixed setup.
+
+A healthy CPU-only stack instead reports:
+
+```
+✓ effective inference devices  asr=CPU rag-embed=CPU rag-rerank=CPU identity=CPU ovms-llm=CPU
+```
+
+Alternatively, keep `GPU` and install the Intel GPU runtime:
+
+```bash
+sudo apt-get install -y intel-opencl-icd level-zero
+sudo usermod -aG render $USER   # log out and back in
+```
+
+> **Why editing `TARGET_DEVICE` alone is not enough.** A per-service
+> `*_DEVICE` value takes precedence over `TARGET_DEVICE`, and `.env` is not a
+> shell — a variable can only inherit `TARGET_DEVICE` by being **absent or
+> commented out**, never by being set to `${TARGET_DEVICE}`. `.env` files
+> created before this behaviour existed hard-code these four variables to
+> `GPU`; current `.env.example` ships them commented out, but that does not
+> change a `.env` you already have. `make setup-models TARGET_DEVICE=CPU`
+> reconciles the existing file for you.
+>
+> Switching back with `make setup-models TARGET_DEVICE=GPU` restores GPU
+> everywhere — the commented-out pins simply inherit `TARGET_DEVICE` again.
+> A deliberate non-GPU override such as `ASR_DEVICE=NPU` is never rewritten.
+
 ## Selected Device Is Not Used
 
 The device field lives in the per-service pinned config (see

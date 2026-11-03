@@ -35,6 +35,7 @@ from validate_device_profile import (  # noqa: E402
     resolve_profile,
     validate,
     _dev,
+    _stack_dev,
 )
 
 
@@ -79,7 +80,8 @@ def build_manifest(
     source, env = resolve_profile(profile or None, None)
     rep = validate(env, check_hardware=True)
 
-    asr_dev = _dev(env, "ASR_DEVICE", "CPU")
+    stack_dev = _stack_dev(env)
+    asr_dev = _dev(env, "ASR_DEVICE", stack_dev)
     return {
         "profile": env.get("PROFILE_NAME", "") or (profile or ""),
         "profile_source": source,
@@ -92,8 +94,8 @@ def build_manifest(
             "tts": _dev(env, "TTS_DEVICE", "CPU"),
             "llm": _dev(env, "TARGET_DEVICE", "GPU"),
             "diarization": _dev(env, "DIARIZATION_DEVICE", "CPU"),
-            "rag_embedding": _dev(env, "RAG_EMBEDDING_DEVICE", "GPU"),
-            "rag_reranker": _dev(env, "RAG_RERANKER_DEVICE", "GPU"),
+            "rag_embedding": _dev(env, "RAG_EMBEDDING_DEVICE", stack_dev),
+            "rag_reranker": _dev(env, "RAG_RERANKER_DEVICE", stack_dev),
         },
         "models": {
             "asr": env.get("ASR_MODEL", "distil-whisper/distil-small.en"),

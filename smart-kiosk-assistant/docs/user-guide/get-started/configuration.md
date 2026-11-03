@@ -266,14 +266,33 @@ code itself has no bug and no model-format limitation.
 > `./setup_models.sh --identity` first. Without them, the face/voice engines
 > stay disabled (`inference_ready=false`) regardless of the configured device.
 
-## OVMS-LLM Device (`TARGET_DEVICE`)
+## Stack Inference Device (`TARGET_DEVICE`)
 
-`TARGET_DEVICE` controls the inference device for the `ovms-llm` container
-only (the LLM served by OpenVINO™ Model Server for the ordering agent).
-`rag-service`'s own embedding/reranker components have their own,
-independent device configuration — see
-[RAG Service Embedding/Reranker Device](#rag-service-embeddingreranker-device-rag_embedding_device-rag_reranker_device)
-below.
+`TARGET_DEVICE` is the single switch for inference hardware across the stack.
+It selects the device for the `ovms-llm` container (the LLM served by
+OpenVINO™ Model Server for the ordering agent) **and**, unless individually
+overridden, for `audio-analyzer` ASR, `rag-service` embedding/reranker and
+`identity-service`.
+
+Per-service variables (`ASR_DEVICE`, `RAG_EMBEDDING_DEVICE`,
+`RAG_RERANKER_DEVICE`, `IDENTITY_DEVICE`) are left commented out in
+`.env.example` so they inherit `TARGET_DEVICE`. Setting any of them pins that
+service and **takes precedence over `TARGET_DEVICE`**. `TTS_DEVICE`,
+`DIARIZATION_DEVICE` and `QUEUE_DEVICE` remain `CPU` by design.
+
+> **Running without a usable GPU:** run `make setup-models TARGET_DEVICE=CPU`.
+> That switches the whole stack to CPU in one step: it sets `TARGET_DEVICE`
+> and comments out any per-service `*_DEVICE` variable still pinned to `GPU`
+> in your existing `.env`. The second part matters on an install created from
+> an older `.env.example`, which shipped those variables pinned to `GPU`:
+> a per-service pin wins over `TARGET_DEVICE`, so setting `TARGET_DEVICE=CPU`
+> by hand is **not** sufficient on its own, and every pinned service
+> crash-loops at startup with `[GPU] Context was not initialized for 0 device`.
+>
+> A deliberate non-GPU override (e.g. `ASR_DEVICE=NPU`) is left untouched.
+> `make check-env` lists the effective device per service; on a host with no
+> GPU render node it **fails** on any leftover `GPU` pin rather than letting
+> `make up` proceed into a crash-loop.
 
 - **Supported:** `TARGET_DEVICE=CPU`, `TARGET_DEVICE=GPU`.
 - **Not supported:** `TARGET_DEVICE=NPU` — see below.
@@ -312,11 +331,12 @@ below.
 in-process by `optimum-intel` (`rag-service/utils/ensure_model.py`) and
 loaded via `OVModelForFeatureExtraction`/equivalent
 (`rag-service/components/embedding_component.py`,
-`reranker_component.py`). Their device is set independently of
-`TARGET_DEVICE` via `RAG_EMBEDDING_DEVICE` / `RAG_RERANKER_DEVICE` in
+`reranker_component.py`). Their device defaults to `TARGET_DEVICE` and can be
+pinned independently via `RAG_EMBEDDING_DEVICE` / `RAG_RERANKER_DEVICE` in
 `.env` (mapped by `docker-compose.yml` to
 `SMART_KIOSK_RAG__MODELS__EMBEDDING__DEVICE` /
-`SMART_KIOSK_RAG__RETRIEVAL__RERANKER__DEVICE`).
+`SMART_KIOSK_RAG__RETRIEVAL__RERANKER__DEVICE`). An explicit value wins over
+`TARGET_DEVICE`, so leave them commented out unless you need the split.
 
 - **Currently supported:** `RAG_EMBEDDING_DEVICE`/`RAG_RERANKER_DEVICE` =
   `CPU` or `GPU`. Default: `GPU`.
@@ -351,8 +371,8 @@ so an ordinary `make up` is unaffected.
 | Variable | Default (= shipped config) | Purpose |
 | --- | --- | --- |
 | `ASR_MODEL` | `distil-whisper/distil-small.en` | ASR checkpoint |
-| `ASR_DEVICE` | `GPU` | ASR final-commit device |
-| `ASR_PREVIEW_DEVICE` | `${ASR_DEVICE}` | Streaming/partial ASR pool device |
+| `ASR_DEVICE` | `${TARGET_DEVICE}` (`GPU`) | ASR final-commit device |
+| `ASR_PREVIEW_DEVICE` | `${ASR_DEVICE}` → `${TARGET_DEVICE}` | Streaming/partial ASR pool device |
 | `DIARIZATION_DEVICE` | `CPU` | Diarization device (**CPU only**) |
 | `TTS_MODEL` | `kokoro` | TTS model |
 | `TTS_RUNTIME` | `kokoro` | TTS engine/runtime |
@@ -468,7 +488,7 @@ Step-by-step workflow to run this stack with Intel NPU acceleration where suppor
 | Identity Service voice/ECAPA-TDNN (`IDENTITY_DEVICE`) | ❌ No — dynamic shape rejected by NPU compiler |
 | Audio Analyzer ASR (`models.asr.device`) | ⚠️ `whisper-tiny`/`whisper-base` only — see [ASR Support Matrix](#asr-support-matrix) |
 | Audio Analyzer Diarization (`models.diarization.device`) | ❌ No — CPU only |
-| OVMS-LLM (`TARGET_DEVICE`) | ❌ No — compiles, but INT8 is ~100× too slow and INT4 is numerically broken — see [`TARGET_DEVICE`](#ovms-llm-device-target_device) |
+| OVMS-LLM (`TARGET_DEVICE`) | ❌ No — compiles, but INT8 is ~100× too slow and INT4 is numerically broken — see [`TARGET_DEVICE`](#stack-inference-device-target_device) |
 | RAG Service embedding/reranker (`RAG_EMBEDDING_DEVICE`/`RAG_RERANKER_DEVICE`) | ❌ No — dynamic shape rejected by NPU compiler |
 | Text-to-Speech (`models.tts.device`) | ❌ No |
 

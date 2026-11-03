@@ -248,6 +248,19 @@ def _dev(env: dict[str, str], key: str, default: str) -> str:
     return (env.get(key) or default).strip().upper()
 
 
+def _stack_dev(env: dict[str, str]) -> str:
+    """Return the stack-wide default inference device.
+
+    Mirrors the ``${TARGET_DEVICE:-GPU}`` tail that every per-service device
+    falls back through in docker-compose, so the validator and the run
+    manifest resolve the same device the containers actually receive. A fixed
+    literal default here would silently disagree with Compose as soon as the
+    per-service pin is left unset, which is the default since the GPU pins
+    were removed from .env.example.
+    """
+    return _dev(env, "TARGET_DEVICE", "GPU")
+
+
 def _engine_key(model: str, runtime: str) -> tuple[str, str] | None:
     """Resolve a (model, runtime) pair to a known TTS engine key."""
     m = model.lower()
@@ -270,7 +283,8 @@ def validate(env: dict[str, str], check_hardware: bool = True) -> Report:
     """
     rep = Report()
 
-    asr_dev = _dev(env, "ASR_DEVICE", "CPU")
+    stack_dev = _stack_dev(env)
+    asr_dev = _dev(env, "ASR_DEVICE", stack_dev)
     asr_prev = _dev(env, "ASR_PREVIEW_DEVICE", asr_dev)
     asr_model = (env.get("ASR_MODEL") or "distil-whisper/distil-small.en").strip()
     asr_provider = (env.get("ASR_PROVIDER") or "openvino").strip().lower()
@@ -284,8 +298,8 @@ def validate(env: dict[str, str], check_hardware: bool = True) -> Report:
     tts_variant = (env.get("TTS_MODEL_VARIANT") or "custom_voice").strip().lower()
 
     llm_dev = _dev(env, "TARGET_DEVICE", "GPU")
-    emb_dev = _dev(env, "RAG_EMBEDDING_DEVICE", "GPU")
-    rrk_dev = _dev(env, "RAG_RERANKER_DEVICE", "GPU")
+    emb_dev = _dev(env, "RAG_EMBEDDING_DEVICE", stack_dev)
+    rrk_dev = _dev(env, "RAG_RERANKER_DEVICE", stack_dev)
 
     # -- device string sanity --------------------------------------------
     for label, value in (
@@ -519,7 +533,8 @@ def main() -> int:
     source, env = resolve_profile(args.profile, args.env_file)
     rep = validate(env, check_hardware=not args.no_hardware_check)
 
-    asr_dev = _dev(env, "ASR_DEVICE", "CPU")
+    stack_dev = _stack_dev(env)
+    asr_dev = _dev(env, "ASR_DEVICE", stack_dev)
     summary = {
         "profile": env.get("PROFILE_NAME", ""),
         "source": source,

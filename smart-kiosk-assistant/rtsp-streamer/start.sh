@@ -197,14 +197,37 @@ mediamtx_pid=$!
 pids="$mediamtx_pid"
 log "mediamtx started (PID=$mediamtx_pid)"
 
+# mediamtx's own stdout/stderr is the only record of *why* it refused to start
+# (bad config, port already in use, unreadable mediamtx.yml). It is redirected
+# to a file so it does not interleave with ffmpeg output, which means that
+# without this dump the container just restart-loops printing a generic
+# message while the real cause stays trapped in /tmp inside a dead container.
+dump_mediamtx_log() {
+  if [ -s /tmp/mediamtx.log ]; then
+    log "----- mediamtx log (last 50 lines) -----" >&2
+    tail -n 50 /tmp/mediamtx.log >&2
+    log "----- end mediamtx log -----" >&2
+  else
+    log "mediamtx produced no output in /tmp/mediamtx.log" >&2
+  fi
+}
+
 # Wait for RTSP server to accept connections
 log "Waiting for mediamtx to accept connections on port $RTSP_PORT ..."
 retry=50
 while ! nc -z 127.0.0.1 "$RTSP_PORT" >/dev/null 2>&1; do
+  # Fail immediately when mediamtx is already gone rather than burning the
+  # full 10s timeout on a process that will never bind the port.
+  if ! kill -0 "$mediamtx_pid" 2>/dev/null; then
+    log "ERROR mediamtx (PID=$mediamtx_pid) exited before accepting connections on port $RTSP_PORT" >&2
+    dump_mediamtx_log
+    exit 1
+  fi
   retry=$((retry - 1))
   if [ "$retry" -le 0 ]; then
     log "ERROR RTSP server failed to start on port $RTSP_PORT" >&2
-    kill "$mediamtx_pid"
+    dump_mediamtx_log
+    kill "$mediamtx_pid" 2>/dev/null || true
     wait "$mediamtx_pid" 2>/dev/null || true
     exit 1
   fi

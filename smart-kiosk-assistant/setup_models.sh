@@ -670,6 +670,43 @@ update_env() {
         echo "  ✓ TARGET_DEVICE added    → ${TARGET_DEVICE}"
     fi
 
+    # Stale per-service GPU pins.
+    #
+    # A per-service *_DEVICE value takes precedence over TARGET_DEVICE in
+    # docker-compose (${ASR_DEVICE:-${TARGET_DEVICE:-GPU}}), and .env is not a
+    # shell -- a variable can only inherit TARGET_DEVICE by being absent.
+    # Older .env.example revisions shipped these pinned to GPU, so a user
+    # switching an existing install to CPU got TARGET_DEVICE=CPU while every
+    # service still asked for GPU and crash-looped with
+    # '[GPU] Context was not initialized for 0 device' (ITEP-97604). Editing
+    # .env.example cannot help them: their .env already exists.
+    #
+    # Only GPU pins are neutralised, and only when the requested device is not
+    # GPU. That is exactly the population affected by the old .env.example,
+    # and it leaves a deliberate heterogeneous override (e.g. ASR_DEVICE=NPU)
+    # untouched. TTS_DEVICE/DIARIZATION_DEVICE/QUEUE_DEVICE are deliberately
+    # CPU-only and are never rewritten in either direction.
+    if [ "${TARGET_DEVICE}" != "GPU" ]; then
+        local _var _pat
+        for _var in ASR_DEVICE RAG_EMBEDDING_DEVICE RAG_RERANKER_DEVICE \
+                    RAG_LLM_DEVICE IDENTITY_DEVICE; do
+            # Match the assignment forms both consumers actually honour, not
+            # just the canonical one: docker-compose's .env parser and make's
+            # `include .env` each accept an `export ` prefix and whitespace
+            # around the `=`. A pin written either way is live, so a pattern
+            # anchored on '^VAR=GPU' would leave it in place while check-env
+            # still -- correctly -- reports the service as GPU-pinned.
+            _pat="^[[:space:]]*(export[[:space:]]+)?${_var}[[:space:]]*=[[:space:]]*GPU([[:space:]].*)?$"
+            if grep -qE "${_pat}" "${ENV_FILE}" 2>/dev/null; then
+                # Comment the line out rather than deleting it, so the previous
+                # value stays visible and the edit is reversible by hand.
+                sed -i -E "s|(${_pat})|# \1  # auto-disabled by setup_models.sh (TARGET_DEVICE=${TARGET_DEVICE}); delete this line to re-pin GPU|" \
+                    "${ENV_FILE}"
+                echo "  ✓ ${_var}=GPU commented out (it would have overridden TARGET_DEVICE=${TARGET_DEVICE})"
+            fi
+        done
+    fi
+
     # RENDER_GID — needed for GPU/NPU access inside containers
     if ! grep -q "^RENDER_GID=" "${ENV_FILE}" 2>/dev/null; then
         local render_gid
