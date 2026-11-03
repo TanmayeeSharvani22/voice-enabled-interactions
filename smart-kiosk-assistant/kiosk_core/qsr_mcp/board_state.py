@@ -72,3 +72,21 @@ def set_mode(mode: str, reason: str | None = None) -> dict[str, Any]:
             except OSError as exc:
                 logger.warning("[BoardState] Could not persist state to %s: %s", _path, exc)
     return snapshot
+
+
+def update_settings(reason: str | None = None, **settings: Any) -> dict[str, Any]:
+    """Persist kiosk operating settings (``active_kiosks``, ``upsell_enabled``)."""
+    unknown = set(settings) - {"active_kiosks", "upsell_enabled"}
+    if unknown:
+        raise ValueError(f"unknown kiosk settings: {', '.join(sorted(unknown))}")
+    with _lock:
+        _state.update(settings)
+        _state["settings_reason"] = reason
+        _state["settings_updated_at"] = time.time()
+        snapshot = dict(_state)
+        if _path is not None:
+            try:
+                write_json_atomic(_path, snapshot)
+            except OSError as exc:
+                logger.warning("[BoardState] Could not persist state to %s: %s", _path, exc)
+    return snapshot

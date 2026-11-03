@@ -107,6 +107,8 @@ class AutonomyEventSink:
         self._post_json = post_json
         self._lock = threading.Lock()
         self._last_queue_count: int | None = None
+        # Queue count last forwarded before each accepted sample, by ref_id (retries rebuild the event).
+        self._previous_counts: dict[str, int | None] = {}
 
     # -- eligibility --------------------------------------------------------
 
@@ -132,6 +134,9 @@ class AutonomyEventSink:
             if previous is not None and abs(count - previous) < self._queue_min_delta:
                 return False
             self._last_queue_count = count
+            self._previous_counts[event.ref_id] = previous
+            while len(self._previous_counts) > 256:
+                self._previous_counts.pop(next(iter(self._previous_counts)))
         return True
 
     # -- envelope -----------------------------------------------------------
@@ -152,11 +157,17 @@ class AutonomyEventSink:
             # The agent's HermesEventMenuPolicy rejects anything that is not a
             # non-negative, non-boolean int.
             data["queue_count"] = _coerce_queue_count(payload.get("count"))
+            with self._lock:
+                previous = self._previous_counts.get(event.ref_id)
+            if previous is not None:
+                data["previous_queue_count"] = previous
         return {
             # Stable across retries so the agent deduplicates redeliveries;
             # ref_id is unique per emitted event.
             "event_id": f"{event.service}-{event.event_type}-{event.ref_id}",
             "event_type": self.EVENT_TYPE_MAP.get(event.event_type, event.event_type),
+            # The agent journals and learns per service; its kiosk capability is `kiosk`.
+            "service": "kiosk",
             "store_id": self._store_id,
             "occurred_at": occurred_at,
             "data": data,

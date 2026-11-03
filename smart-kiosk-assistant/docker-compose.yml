@@ -1093,6 +1093,11 @@ services:
       KIOSK_CORE_QSR_AUTONOMY_STORE_ID:     "${KIOSK_CORE_QSR_AUTONOMY_STORE_ID:-qsr-001}"
       KIOSK_CORE_QSR_AUTONOMY_EVENT_TYPES:  "${KIOSK_CORE_QSR_AUTONOMY_EVENT_TYPES:-queue_depth_sample,board_mode_changed}"
       KIOSK_CORE_QSR_AUTONOMY_QUEUE_MIN_DELTA: "${KIOSK_CORE_QSR_AUTONOMY_QUEUE_MIN_DELTA:-1}"
+      # Kiosk settings the QSR agent reads (get_kiosk_context) and changes (update_kiosk_settings).
+      KIOSK_CORE_QSR_RESTAURANT_NAME: "${KIOSK_CORE_QSR_RESTAURANT_NAME:-}"
+      KIOSK_CORE_QSR_MAX_KIOSKS: "${KIOSK_CORE_QSR_MAX_KIOSKS:-4}"
+      KIOSK_CORE_QSR_ACTIVE_KIOSKS: "${KIOSK_CORE_QSR_ACTIVE_KIOSKS:-3}"
+      KIOSK_CORE_QSR_MINUTES_PER_ORDER: "${KIOSK_CORE_QSR_MINUTES_PER_ORDER:-2.0}"
       # Conversation recording (offline analysis). Off by default; set to
       # "true" to append every completed voice turn to
       # ./conversations/<conversation_id>.jsonl on the host (bind-mounted

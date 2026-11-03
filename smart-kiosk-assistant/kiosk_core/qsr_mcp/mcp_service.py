@@ -36,6 +36,7 @@ import calendar
 import logging
 import os
 import sqlite3
+import sys
 import threading
 import time
 import uuid
@@ -48,7 +49,7 @@ from kiosk_core.queue_client import QueueClient
 from kiosk_core.qsr_mcp import board_state
 from kiosk_core.qsr_mcp.autonomy import AutonomyEventSink
 from kiosk_core.qsr_mcp.delivery import BackgroundDispatcher, Delivery
-from kiosk_core.qsr_mcp import menu, menu_requests
+from kiosk_core.qsr_mcp import agent_tools, menu, menu_requests
 from kiosk_core.qsr_mcp.event_log import (
     DurableLog,
     build_log,
@@ -69,6 +70,7 @@ SERVICE_NAME = "smart_kiosk"
 _EVENT_TYPES: dict[str, dict[str, str]] = {
     "queue_depth_sample": {"count": "int", "nearby": "int", "status": "str"},
     "board_mode_changed": {"mode": "str", "reason": "str|None"},
+    "kiosk_settings_changed": {"changes": "dict", "reason": "str"},
     "menu_item_added": {"product_id": "str", "name": "str", "category": "str", "price": "float"},
     "menu_item_updated": {"product_id": "str", "changed": "dict", "reason": "str|None"},
     "menu_change_requested": {"request_id": "str", "action": "str", "reason": "str|None"},
@@ -257,6 +259,7 @@ def emit_queue_sample(snapshot: dict[str, Any]) -> None:
                 "count": snapshot.get("count"),
                 "nearby": snapshot.get("nearby"),
                 "status": snapshot.get("status"),
+                "estimated_wait_minutes": agent_tools.estimated_wait_minutes(snapshot.get("count")),
             },
         )
     except Exception:
@@ -644,6 +647,7 @@ def _register_policies() -> None:
         "update_menu_item", _UPDATE_GATE,
         max_calls=cfg.QSR_MENU_MAX_CALLS, per_seconds=cfg.QSR_MENU_PER_SECONDS,
     )
+    gate.register(agent_tools.SETTINGS_TOOL, GateLevel.AUTOMATIC, max_calls=20, per_seconds=60.0)
     _policy = gate
 
     _ACT_TOOLS["set_board_mode"]["gate"] = _SET_BOARD_MODE_GATE.value
@@ -961,3 +965,7 @@ def update_menu_item(
         if value is not None:
             payload[key] = value
     return _gated_menu_call("update_menu_item", payload, reason, _update_menu_item_impl)
+
+
+# QSR agent contract: get_kiosk_context, change_menu_items, update_kiosk_settings.
+agent_tools.register(sys.modules[__name__])

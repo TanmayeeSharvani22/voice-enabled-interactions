@@ -176,7 +176,11 @@ _EXPECTED_TOOLS = {
 
 # Tools added after the migration. Listed explicitly so the assertions below
 # stay exact: a removal or an unintended addition still fails.
-_POST_MIGRATION_TOOLS = {"add_menu_item", "update_menu_item", "get_menu_requests"}
+_POST_MIGRATION_TOOLS = {
+    "add_menu_item", "update_menu_item", "get_menu_requests",
+    # QSR agent contract (kiosk_core/qsr_mcp/agent_tools.py).
+    "get_kiosk_context", "change_menu_items", "update_kiosk_settings",
+}
 
 
 def test_tools_list_matches_pre_migration_baseline(qsr_env):
@@ -274,17 +278,20 @@ def test_describe_matches_pre_migration_baseline(qsr_env):
 
     # ...and the only additions are the documented menu ones.
     assert set(actual["read_tools"]) - set(baseline["read_tools"]) == {
-        "get_menu_requests"
+        "get_menu_requests", "get_kiosk_context"
     }
     assert set(actual["act_tools"]) - set(baseline["act_tools"]) == {
         "add_menu_item",
         "update_menu_item",
+        "change_menu_items",
+        "update_kiosk_settings",
     }
     assert set(actual["event_types"]) - set(baseline["event_types"]) == {
         "menu_item_added",
         "menu_item_updated",
         "menu_change_requested",
         "menu_change_resolved",
+        "kiosk_settings_changed",
     }
     # add_menu_item must stay behind the approval gate by default.
     assert actual["act_tools"]["add_menu_item"]["gate"] == "needs_approval"
