@@ -51,7 +51,7 @@ def settings() -> dict[str, Any]:
 
 
 def upsell_enabled() -> bool:
-    return bool(board_state.get().get("upsell_enabled", True))
+    return bool(board_state.get_fresh(cfg.QSR_MCP_BOARD_STATE_PATH).get("upsell_enabled", True))
 
 
 def estimated_wait_minutes(queue_count: Any) -> Optional[int]:
@@ -172,6 +172,11 @@ def register(service: ModuleType) -> None:
             if not change["reason"].strip():
                 raise ValueError("each menu change needs a reason")
             seen.add(change["item_id"])
+        service._ensure_init()
+        refusal = service._policy.check_capacity("update_menu_item", len(changes))
+        if refusal is not None:
+            return {"executed": False, "level": refusal.level.value, "reason": refusal.reason,
+                    "changes": changes}
         results = [
             service._gated_menu_call(
                 "update_menu_item", {"product_id": change["item_id"], "is_available": change["available"]},

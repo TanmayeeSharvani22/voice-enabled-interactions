@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import os
+import time
 from datetime import datetime, timezone
 
 import pytest
@@ -151,3 +153,34 @@ def test_queue_events_carry_service_previous_count_and_wait():
     assert (sent[1]["data"]["queue_count"], sent[1]["data"]["previous_queue_count"],
             sent[1]["data"]["estimated_wait_minutes"]) == (8, 3, 8)
     assert datetime.fromisoformat(sent[1]["occurred_at"]).tzinfo == timezone.utc
+
+
+def test_bundle_at_the_rate_limit_boundary_applies_nothing(kiosk):
+    spec = kiosk._policy._actions["update_menu_item"]
+    spec.max_calls = 3
+    spec._calls.extend([time.monotonic()] * 2)  # one call left, bundle needs two
+    result = call(kiosk, "change_menu_items", {
+        "changes": [{"item_id": "P2", "available": False, "reason": "out of cola"},
+                    {"item_id": "P3", "available": False, "reason": "fryer down"}],
+        "reason": "stock-out"})
+    assert result["executed"] is False and result["reason"] == "rate limit exceeded"
+    items = {item["id"]: item["available"] for item in call(kiosk, "get_kiosk_context")["menu"]["items"]}
+    assert items == {"P1": True, "P2": True, "P3": True}
+    spec._calls.clear()  # the same bundle goes through once there is room
+    assert call(kiosk, "change_menu_items", {
+        "changes": [{"item_id": "P2", "available": False, "reason": "out of cola"},
+                    {"item_id": "P3", "available": False, "reason": "fryer down"}],
+        "reason": "stock-out"})["executed"] is True
+
+
+def test_upsell_setting_written_by_another_process_is_picked_up(kiosk, tmp_path):
+    from kiosk_core.qsr_mcp import agent_tools, board_state
+
+    path = tmp_path / "board.json"
+    assert agent_tools.upsell_enabled() is True
+    state = json.loads(path.read_text()) if path.exists() else {"mode": "full"}
+    state["upsell_enabled"] = False
+    path.write_text(json.dumps(state))  # written by the standalone MCP process
+    os.utime(path, ns=(time.time_ns() + 10**9,) * 2)
+    assert agent_tools.upsell_enabled() is False
+    assert board_state.get()["upsell_enabled"] is False
