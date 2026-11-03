@@ -687,13 +687,20 @@ update_env() {
     # untouched. TTS_DEVICE/DIARIZATION_DEVICE/QUEUE_DEVICE are deliberately
     # CPU-only and are never rewritten in either direction.
     if [ "${TARGET_DEVICE}" != "GPU" ]; then
-        local _var
+        local _var _pat
         for _var in ASR_DEVICE RAG_EMBEDDING_DEVICE RAG_RERANKER_DEVICE \
                     RAG_LLM_DEVICE IDENTITY_DEVICE; do
-            if grep -qE "^${_var}=GPU([[:space:]].*)?$" "${ENV_FILE}" 2>/dev/null; then
+            # Match the assignment forms both consumers actually honour, not
+            # just the canonical one: docker-compose's .env parser and make's
+            # `include .env` each accept an `export ` prefix and whitespace
+            # around the `=`. A pin written either way is live, so a pattern
+            # anchored on '^VAR=GPU' would leave it in place while check-env
+            # still -- correctly -- reports the service as GPU-pinned.
+            _pat="^[[:space:]]*(export[[:space:]]+)?${_var}[[:space:]]*=[[:space:]]*GPU([[:space:]].*)?$"
+            if grep -qE "${_pat}" "${ENV_FILE}" 2>/dev/null; then
                 # Comment the line out rather than deleting it, so the previous
                 # value stays visible and the edit is reversible by hand.
-                sed -i -E "s|^(${_var}=GPU([[:space:]].*)?)$|# \1  # auto-disabled by setup_models.sh (TARGET_DEVICE=${TARGET_DEVICE}); delete this line to re-pin GPU|" \
+                sed -i -E "s|(${_pat})|# \1  # auto-disabled by setup_models.sh (TARGET_DEVICE=${TARGET_DEVICE}); delete this line to re-pin GPU|" \
                     "${ENV_FILE}"
                 echo "  ✓ ${_var}=GPU commented out (it would have overridden TARGET_DEVICE=${TARGET_DEVICE})"
             fi

@@ -548,21 +548,29 @@ check-env: ## Validate .env and all required variables before running the stack
 			echo "  $(GREEN)✓ GPU device node found$(NC) ($$(ls /dev/dri/renderD* 2>/dev/null | head -1))"; \
 		fi; \
 	fi; \
-	_GPU_PINS=""; \
-	for _v in ASR_DEVICE:$(ASR_DEVICE) RAG_EMBEDDING_DEVICE:$(RAG_EMBEDDING_DEVICE) RAG_RERANKER_DEVICE:$(RAG_RERANKER_DEVICE) RAG_LLM_DEVICE:$(RAG_LLM_DEVICE) IDENTITY_DEVICE:$(IDENTITY_DEVICE) TTS_DEVICE:$(TTS_DEVICE) DIARIZATION_DEVICE:$(DIARIZATION_DEVICE) QUEUE_DEVICE:$(QUEUE_DEVICE); do \
+	_GPU_PINS=""; _GPU_PINS_MANUAL=""; \
+	for _v in ASR_DEVICE:$(ASR_DEVICE) RAG_EMBEDDING_DEVICE:$(RAG_EMBEDDING_DEVICE) RAG_RERANKER_DEVICE:$(RAG_RERANKER_DEVICE) RAG_LLM_DEVICE:$(RAG_LLM_DEVICE) $(if $(_IDENTITY_ON),IDENTITY_DEVICE:$(IDENTITY_DEVICE),); do \
 		case "$$_v" in *:GPU) _GPU_PINS="$$_GPU_PINS $${_v%%:*}";; esac; \
 	done; \
-	if [ "$(TARGET_DEVICE)" != "GPU" ] && [ -n "$$_GPU_PINS" ]; then \
+	for _v in TTS_DEVICE:$(TTS_DEVICE) DIARIZATION_DEVICE:$(DIARIZATION_DEVICE) $(if $(_QUEUE_ON),QUEUE_DEVICE:$(QUEUE_DEVICE),); do \
+		case "$$_v" in *:GPU) _GPU_PINS_MANUAL="$$_GPU_PINS_MANUAL $${_v%%:*}";; esac; \
+	done; \
+	if [ "$(TARGET_DEVICE)" != "GPU" ] && [ -n "$$_GPU_PINS$$_GPU_PINS_MANUAL" ]; then \
 		if [ -z "$$(ls /dev/dri/renderD* 2>/dev/null)" ]; then \
-			echo "  $(RED)✗ TARGET_DEVICE=$(TARGET_DEVICE) but these override(s) still pin GPU:$$_GPU_PINS$(NC)"; \
+			echo "  $(RED)✗ TARGET_DEVICE=$(TARGET_DEVICE) but these override(s) still pin GPU:$$_GPU_PINS$$_GPU_PINS_MANUAL$(NC)"; \
 			echo "    A per-service *_DEVICE value takes precedence over TARGET_DEVICE, and this"; \
 			echo "    host has no GPU render node, so each pinned service will crash-loop with"; \
 			echo "    '[GPU] Context was not initialized for 0 device'."; \
-			echo "    Fix: $(YELLOW)make setup-models TARGET_DEVICE=$(TARGET_DEVICE)$(NC) (comments them out for you),"; \
-			echo "    or comment them out in .env by hand so they inherit TARGET_DEVICE."; \
+			if [ -n "$$_GPU_PINS" ]; then \
+				echo "    Fix$${_GPU_PINS}: $(YELLOW)make setup-models TARGET_DEVICE=$(TARGET_DEVICE)$(NC) (comments them out for you)."; \
+			fi; \
+			if [ -n "$$_GPU_PINS_MANUAL" ]; then \
+				echo "    Fix$${_GPU_PINS_MANUAL}: comment them out in .env by hand (setup-models leaves these"; \
+				echo "    alone because they are deliberately CPU-only and never auto-rewritten)."; \
+			fi; \
 			ERRORS=$$((ERRORS+1)); \
 		else \
-			echo "  $(YELLOW)⚠ TARGET_DEVICE=$(TARGET_DEVICE) but these override(s) still pin GPU:$$_GPU_PINS$(NC)"; \
+			echo "  $(YELLOW)⚠ TARGET_DEVICE=$(TARGET_DEVICE) but these override(s) still pin GPU:$$_GPU_PINS$$_GPU_PINS_MANUAL$(NC)"; \
 			echo "    A per-service *_DEVICE value takes precedence over TARGET_DEVICE."; \
 			echo "    This host has a usable GPU, so it is allowed — a deliberate mixed setup."; \
 			echo "    For a fully CPU-only stack, unset them in .env."; \

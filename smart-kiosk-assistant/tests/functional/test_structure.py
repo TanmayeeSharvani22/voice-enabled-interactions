@@ -13,6 +13,8 @@ Run:
     pytest tests/functional/test_structure.py -m tier1 -v
 """
 from pathlib import Path
+import re
+import subprocess
 
 import pytest
 
@@ -612,6 +614,7 @@ class TestTargetDeviceDrivesEveryService:
     # user has not pinned them. TTS/diarization/queue are deliberately CPU.
     _CHAINED = (
         "AUDIO_ANALYZER__MODELS__ASR__DEVICE",
+        "AUDIO_ANALYZER__MODELS__ASR__PREVIEW__DEVICE",
         "SMART_KIOSK_RAG__MODELS__EMBEDDING__DEVICE",
         "SMART_KIOSK_RAG__RETRIEVAL__RERANKER__DEVICE",
         "IDENTITY_DEVICE",
@@ -808,3 +811,124 @@ class TestSetupModelsNeutralisesStaleGpuPins:
             "on a host with no render node a leftover GPU pin must increment "
             "ERRORS so check-env exits non-zero and `up` is blocked"
         )
+
+
+class TestDevicePinDetectionMatchesWhatComposeHonours:
+    """The pin detector, the un-pinner and the device tools must agree.
+
+    Three consumers resolve the same per-service `*_DEVICE` variables:
+    docker-compose, `make check-env` and `scripts/validate_device_profile.py`.
+    If any of them disagrees about which assignments are live -- or about what
+    an unset variable falls back to -- `make setup-models TARGET_DEVICE=CPU`
+    reports success while check-env still blocks startup, or a benchmark run
+    records a device the container never received.
+    """
+
+    _MAKEFILE = (_KIOSK_ROOT / "Makefile").read_text()
+    _SETUP = (_KIOSK_ROOT / "setup_models.sh").read_text()
+    _VALIDATE = (_KIOSK_ROOT / "scripts" / "validate_device_profile.py").read_text()
+    _MANIFEST = (_KIOSK_ROOT / "scripts" / "write_run_manifest.py").read_text()
+
+    @pytest.mark.tier1
+    @pytest.mark.parametrize(
+        "line",
+        (
+            "export ASR_DEVICE=GPU",
+            "ASR_DEVICE = GPU",
+            "  ASR_DEVICE=GPU",
+            "ASR_DEVICE=GPU  # pinned for a bench run",
+        ),
+    )
+    def test_unpinner_matches_every_live_assignment_form(self, line, tmp_path):
+        """Forms Compose and make honour must all be neutralised.
+
+        Compose's dotenv parser and make's `include .env` both accept an
+        `export` prefix and whitespace around the `=`. A pattern anchored on
+        '^VAR=GPU' leaves those pins in place, so the documented recovery
+        command silently fails and check-env keeps failing.
+        """
+        pattern = re.search(
+            r'_pat="(\^[^"]+)"', self._SETUP
+        )
+        assert pattern, "expected a _pat= regex in setup_models.sh"
+        rx = pattern.group(1).replace("${_var}", "ASR_DEVICE")
+        env = tmp_path / ".env"
+        env.write_text(line + "\n")
+        out = subprocess.run(
+            ["grep", "-qE", rx, str(env)], check=False
+        )
+        assert out.returncode == 0, (
+            f"setup_models.sh would not neutralise a live pin written as "
+            f"{line!r}; Compose and make both resolve it to GPU"
+        )
+
+    @pytest.mark.tier1
+    @pytest.mark.parametrize("var", ("MY_ASR_DEVICE=GPU", "ASR_DEVICE_EXTRA=GPU"))
+    def test_unpinner_does_not_match_unrelated_variables(self, var, tmp_path):
+        """A loose pattern must not rewrite similarly-named variables."""
+        pattern = re.search(r'_pat="(\^[^"]+)"', self._SETUP)
+        rx = pattern.group(1).replace("${_var}", "ASR_DEVICE")
+        env = tmp_path / ".env"
+        env.write_text(var + "\n")
+        out = subprocess.run(["grep", "-qE", rx, str(env)], check=False)
+        assert out.returncode != 0, f"{var} must not be treated as an ASR_DEVICE pin"
+
+    @pytest.mark.tier1
+    @pytest.mark.parametrize("var", ("IDENTITY_DEVICE", "QUEUE_DEVICE"))
+    def test_disabled_services_do_not_block_startup(self, var):
+        """A pin on a service whose profile is off must not fail check-env.
+
+        identity-service and queue-service only start under their Compose
+        profiles. Failing check-env for a container that will never be created
+        blocks an otherwise valid CPU-only stack.
+        """
+        flag = "_IDENTITY_ON" if var == "IDENTITY_DEVICE" else "_QUEUE_ON"
+        block = self._MAKEFILE.split("_GPU_PINS=\"\"")[1].split("effective inference devices")[0]
+        assert f"$(if $({flag}),{var}:" in block, (
+            f"{var} must only join the GPU-pin check when {flag} is set, "
+            f"so a disabled service cannot block a CPU-only bring-up"
+        )
+
+    @pytest.mark.tier1
+    def test_remediation_only_offers_setup_models_for_vars_it_rewrites(self):
+        """check-env must not point at a command that cannot fix the pin.
+
+        setup_models.sh rewrites only the ASR/RAG/identity pins. TTS,
+        diarization and queue are deliberately CPU-only and never auto-
+        rewritten, so telling the user to run `make setup-models` for those
+        is a dead end.
+        """
+        unpinned = self._SETUP.split("for _var in", 1)[1].split("; do", 1)[0]
+        for var in ("ASR_DEVICE", "RAG_EMBEDDING_DEVICE", "RAG_RERANKER_DEVICE",
+                    "RAG_LLM_DEVICE", "IDENTITY_DEVICE"):
+            assert var in unpinned, f"{var} should be auto-un-pinned"
+        for var in ("TTS_DEVICE", "DIARIZATION_DEVICE", "QUEUE_DEVICE"):
+            assert var not in unpinned, f"{var} is CPU-by-design, not auto-rewritten"
+
+        block = self._MAKEFILE.split("_GPU_PINS=\"\"")[1].split("effective inference devices")[0]
+        assert "_GPU_PINS_MANUAL" in block, (
+            "check-env must separate pins `make setup-models` can clear from "
+            "those needing a manual .env edit, or its 'Fix:' line is wrong"
+        )
+
+    @pytest.mark.tier1
+    @pytest.mark.parametrize(
+        "source", ("_VALIDATE", "_MANIFEST"),
+    )
+    def test_device_tools_inherit_target_device(self, source):
+        """Benchmark tooling must resolve devices the way Compose does.
+
+        A literal default here disagrees with Compose as soon as the
+        per-service pin is unset -- which is now the shipped default -- so a
+        CPU-only run gets rejected on a GPU-less host, or the manifest records
+        a device the container never used.
+        """
+        text = getattr(self, source)
+        for stale in ('"ASR_DEVICE", "CPU"',
+                      '"RAG_EMBEDDING_DEVICE", "GPU"',
+                      '"RAG_RERANKER_DEVICE", "GPU"'):
+            assert stale not in text, (
+                f"{stale} hard-codes a default that no longer matches "
+                f"docker-compose's ${{TARGET_DEVICE:-GPU}} fallback"
+            )
+        assert "stack_dev" in text, "expected devices to chain through _stack_dev()"

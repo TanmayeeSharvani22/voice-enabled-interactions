@@ -371,8 +371,8 @@ so an ordinary `make up` is unaffected.
 | Variable | Default (= shipped config) | Purpose |
 | --- | --- | --- |
 | `ASR_MODEL` | `distil-whisper/distil-small.en` | ASR checkpoint |
-| `ASR_DEVICE` | `GPU` | ASR final-commit device |
-| `ASR_PREVIEW_DEVICE` | `${ASR_DEVICE}` | Streaming/partial ASR pool device |
+| `ASR_DEVICE` | `${TARGET_DEVICE}` (`GPU`) | ASR final-commit device |
+| `ASR_PREVIEW_DEVICE` | `${ASR_DEVICE}` → `${TARGET_DEVICE}` | Streaming/partial ASR pool device |
 | `DIARIZATION_DEVICE` | `CPU` | Diarization device (**CPU only**) |
 | `TTS_MODEL` | `kokoro` | TTS model |
 | `TTS_RUNTIME` | `kokoro` | TTS engine/runtime |
