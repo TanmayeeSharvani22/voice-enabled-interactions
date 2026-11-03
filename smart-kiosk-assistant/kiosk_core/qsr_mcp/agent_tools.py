@@ -20,9 +20,10 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 from types import ModuleType
-from typing import Annotated, Any, Literal, Optional, TypedDict
+from typing import Annotated, Any, Literal, Optional
 
 from pydantic import Field
+from typing_extensions import TypedDict
 
 from kiosk_core import config as cfg
 from kiosk_core.qsr_mcp import board_state, menu
