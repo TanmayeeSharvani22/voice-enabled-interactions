@@ -270,6 +270,18 @@ class TestDockerComposeEnvCompleteness:
                                   # (${ASR_PREVIEW_DEVICE:-${ASR_DEVICE:-CPU}}). Left commented
                                   # in .env.example because a .env file cannot expand the nested
                                   # ${ASR_DEVICE:-CPU} fallback (see item 5 / validate_device_profile).
+        # Per-service inference devices. All resolve to
+        # ${<VAR>:-${TARGET_DEVICE:-GPU}} in docker-compose.yml so they inherit
+        # TARGET_DEVICE, letting a CPU-only host switch the whole stack with one
+        # variable (ITEP-97604). They must stay *commented out* in .env.example:
+        # a .env file is not a shell, so an uncommented ASR_DEVICE=GPU is a
+        # literal value that silently wins over TARGET_DEVICE and crash-loops the
+        # service with "[GPU] Context was not initialized for 0 device".
+        "ASR_DEVICE",
+        "RAG_EMBEDDING_DEVICE",
+        "RAG_RERANKER_DEVICE",
+        "RAG_LLM_DEVICE",
+        "IDENTITY_DEVICE",
     }
 
     @pytest.mark.tier1

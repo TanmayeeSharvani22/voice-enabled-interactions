@@ -136,7 +136,7 @@ _RTSP_SOURCE_MODE      = $(if $(_RTSP_SOURCE_MODE_RAW),$(_RTSP_SOURCE_MODE_RAW),
 _RTSP_LIVE_ON          = $(filter live,$(_RTSP_SOURCE_MODE))
 _CAMERA_DEVICE_RAW     = $(strip $(CAMERA_DEVICE))
 _RTSP_CAMERA_DEVICE    = $(if $(_RTSP_LIVE_ON),$(_CAMERA_DEVICE_RAW),/dev/null)
-COMPOSE_BASE           = RTSP_SOURCE_MODE=$(_RTSP_SOURCE_MODE) RTSP_CAMERA_DEVICE=$(_RTSP_CAMERA_DEVICE) docker compose -f $(COMPOSE_FILE)
+COMPOSE_BASE           = RTSP_SOURCE_MODE=$(_RTSP_SOURCE_MODE) RTSP_CAMERA_DEVICE=$(_RTSP_CAMERA_DEVICE) TARGET_DEVICE=$(TARGET_DEVICE) docker compose -f $(COMPOSE_FILE)
 
 # Egress proxy needs no Makefile support and no override file: docker-compose.yml
 # declares HTTP_PROXY/HTTPS_PROXY (both letter cases) as value-less keys, which
@@ -538,12 +538,37 @@ check-env: ## Validate .env and all required variables before running the stack
 			echo "  $(GREEN)✓ RENDER_GID=$(RENDER_GID)$(NC)"; \
 		fi; \
 		if [ -z "$$(ls /dev/dri/renderD* 2>/dev/null)" ]; then \
-			echo "  $(YELLOW)⚠ TARGET_DEVICE=GPU but no /dev/dri/renderD* device found$(NC)"; \
-			echo "    Install Intel GPU drivers or set TARGET_DEVICE=CPU in .env"; \
+			echo "  $(RED)✗ TARGET_DEVICE=GPU but no /dev/dri/renderD* device found$(NC)"; \
+			echo "    audio-analyzer, rag-service and identity-service will crash-loop with"; \
+			echo "    '[GPU] Context was not initialized for 0 device'."; \
+			echo "    Fix: install the Intel GPU drivers, or set TARGET_DEVICE=CPU in .env"; \
+			echo "    (TARGET_DEVICE now drives every service's inference device)."; \
+			ERRORS=$$((ERRORS+1)); \
 		else \
 			echo "  $(GREEN)✓ GPU device node found$(NC) ($$(ls /dev/dri/renderD* 2>/dev/null | head -1))"; \
 		fi; \
 	fi; \
+	_GPU_PINS=""; \
+	for _v in ASR_DEVICE:$(ASR_DEVICE) RAG_EMBEDDING_DEVICE:$(RAG_EMBEDDING_DEVICE) RAG_RERANKER_DEVICE:$(RAG_RERANKER_DEVICE) RAG_LLM_DEVICE:$(RAG_LLM_DEVICE) IDENTITY_DEVICE:$(IDENTITY_DEVICE) TTS_DEVICE:$(TTS_DEVICE) DIARIZATION_DEVICE:$(DIARIZATION_DEVICE) QUEUE_DEVICE:$(QUEUE_DEVICE); do \
+		case "$$_v" in *:GPU) _GPU_PINS="$$_GPU_PINS $${_v%%:*}";; esac; \
+	done; \
+	if [ "$(TARGET_DEVICE)" != "GPU" ] && [ -n "$$_GPU_PINS" ]; then \
+		if [ -z "$$(ls /dev/dri/renderD* 2>/dev/null)" ]; then \
+			echo "  $(RED)✗ TARGET_DEVICE=$(TARGET_DEVICE) but these override(s) still pin GPU:$$_GPU_PINS$(NC)"; \
+			echo "    A per-service *_DEVICE value takes precedence over TARGET_DEVICE, and this"; \
+			echo "    host has no GPU render node, so each pinned service will crash-loop with"; \
+			echo "    '[GPU] Context was not initialized for 0 device'."; \
+			echo "    Fix: $(YELLOW)make setup-models TARGET_DEVICE=$(TARGET_DEVICE)$(NC) (comments them out for you),"; \
+			echo "    or comment them out in .env by hand so they inherit TARGET_DEVICE."; \
+			ERRORS=$$((ERRORS+1)); \
+		else \
+			echo "  $(YELLOW)⚠ TARGET_DEVICE=$(TARGET_DEVICE) but these override(s) still pin GPU:$$_GPU_PINS$(NC)"; \
+			echo "    A per-service *_DEVICE value takes precedence over TARGET_DEVICE."; \
+			echo "    This host has a usable GPU, so it is allowed — a deliberate mixed setup."; \
+			echo "    For a fully CPU-only stack, unset them in .env."; \
+		fi; \
+	fi; \
+	echo "  $(GREEN)✓ effective inference devices$(NC)  asr=$(if $(ASR_DEVICE),$(ASR_DEVICE),$(TARGET_DEVICE)) rag-embed=$(if $(RAG_EMBEDDING_DEVICE),$(RAG_EMBEDDING_DEVICE),$(TARGET_DEVICE)) rag-rerank=$(if $(RAG_RERANKER_DEVICE),$(RAG_RERANKER_DEVICE),$(TARGET_DEVICE)) identity=$(if $(IDENTITY_DEVICE),$(IDENTITY_DEVICE),$(TARGET_DEVICE)) ovms-llm=$(TARGET_DEVICE)"; \
 	\
 	if [ ! -d models/$(OVMS_MODEL_NAME) ]; then \
 		echo "  $(YELLOW)⚠ OVMS model not found at models/$(OVMS_MODEL_NAME)$(NC)"; \
