@@ -27,7 +27,14 @@
 # Writes the resolved value ("0" or "1") to stdout. All diagnostics go to
 # stderr so the caller can safely do VALUE=$(resolve-hf-offline.sh).
 #
-# Exit codes: 0 resolved, 3 blocked (no egress, cold cache).
+# Set HF_RESOLVE_DRY_RUN=true to report the verdict without acting on it: the
+# same probe runs, a human-readable summary goes to stderr, and the script
+# always exits 0 (it never blocks). `check-env` uses this so there is exactly
+# ONE probe implementation in the repo. An earlier inline copy of this logic
+# in the Makefile drifted out of sync and contradicted this script -- see the
+# comment on the `check-env` target.
+#
+# Exit codes: 0 resolved, 3 blocked (no egress, cold cache; never in dry run).
 
 set -u
 
@@ -36,19 +43,14 @@ say() { printf '%s\n' "$*" >&2; }
 HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-0}"
 HF_AUTO_OFFLINE="${HF_AUTO_OFFLINE:-true}"
 COMPOSE_PROJECT="${COMPOSE_PROJECT:-smart-kiosk-assistant}"
+HF_RESOLVE_DRY_RUN="${HF_RESOLVE_DRY_RUN:-false}"
 
-# An explicit offline request always wins; check-env already reports whether
-# the caches can actually satisfy it.
-if [ "$HF_HUB_OFFLINE" = "1" ]; then
-    printf '1\n'
-    exit 0
-fi
+dry_run() { [ "$HF_RESOLVE_DRY_RUN" = "true" ] || [ "$HF_RESOLVE_DRY_RUN" = "TRUE" ]; }
 
-if [ "$HF_AUTO_OFFLINE" = "false" ] || [ "$HF_AUTO_OFFLINE" = "FALSE" ]; then
-    printf '%s\n' "$HF_HUB_OFFLINE"
-    exit 0
-fi
-
+# Volumes that must hold real weights before an offline start can work.
+# audio-analyzer is represented by its IR volume, not its HF source cache:
+# cached source weights alone are not enough (see the long note below).
+CACHE_VOLUMES="audio_analyzer_models text_to_speech_cache rag_service_hf_cache"
 # Probe from inside a container, not the host: the host may have egress (or a
 # proxy in the shell) that the containers do not.
 #
@@ -72,23 +74,91 @@ fi
 # it actually has, prefer curl, and remember which tool was found.
 PROBE_IMG=""
 PROBE_TOOL=""
-for I in "${REGISTRY_REPO:-intel}/text-to-speech:${RELEASE_TAG:-latest}" \
-         "${REGISTRY_REPO:-intel}/rag-service:${RELEASE_TAG:-latest}" \
-         "${REGISTRY_REPO:-intel}/kiosk-core:${RELEASE_TAG:-latest}" \
-         "${REGISTRY_REPO:-intel}/audio-analyzer:${RELEASE_TAG:-latest}" \
-         alpine:latest busybox:latest alpine busybox; do
-    docker image inspect "$I" >/dev/null 2>&1 || continue
-    TOOL=$(docker run --rm --entrypoint sh "$I" -c \
-        'if command -v curl >/dev/null 2>&1; then echo curl
-         elif command -v wget >/dev/null 2>&1; then echo wget
-         else echo none; fi' 2>/dev/null | tr -d '\r\n')
-    # Any image with a shell can still inspect the cache volumes.
-    [ -n "$PROBE_IMG" ] || PROBE_IMG="$I"
-    case "$TOOL" in
-        curl) PROBE_IMG="$I"; PROBE_TOOL=curl; break ;;
-        wget) [ -n "$PROBE_TOOL" ] || { PROBE_IMG="$I"; PROBE_TOOL=wget; } ;;
-    esac
-done
+select_probe_image() {
+    for I in "${REGISTRY_REPO:-intel}/text-to-speech:${RELEASE_TAG:-latest}" \
+             "${REGISTRY_REPO:-intel}/rag-service:${RELEASE_TAG:-latest}" \
+             "${REGISTRY_REPO:-intel}/kiosk-core:${RELEASE_TAG:-latest}" \
+             "${REGISTRY_REPO:-intel}/audio-analyzer:${RELEASE_TAG:-latest}" \
+             alpine:latest busybox:latest alpine busybox; do
+        docker image inspect "$I" >/dev/null 2>&1 || continue
+        TOOL=$(docker run --rm --entrypoint sh "$I" -c \
+            'if command -v curl >/dev/null 2>&1; then echo curl
+             elif command -v wget >/dev/null 2>&1; then echo wget
+             else echo none; fi' 2>/dev/null | tr -d '\r\n')
+        # Any image with a shell can still inspect the cache volumes.
+        [ -n "$PROBE_IMG" ] || PROBE_IMG="$I"
+        case "$TOOL" in
+            curl) PROBE_IMG="$I"; PROBE_TOOL=curl; break ;;
+            wget) [ -n "$PROBE_TOOL" ] || { PROBE_IMG="$I"; PROBE_TOOL=wget; } ;;
+        esac
+    done
+}
+
+# Count cache volumes that hold real, complete weight files.
+#
+# `find -L` follows the snapshot symlinks into blobs/, so an interrupted
+# download (a dangling symlink, or a *.incomplete blob) is skipped rather than
+# counted. The size floor rejects an empty models--*/ directory and truncated
+# files: a real ASR/TTS/LLM weight file is tens of MB at minimum, so 1 MiB is
+# far below any true positive while excluding configs and tokenizer JSON.
+#
+# The IR volumes are checked too, not just the HF source caches. Cached source
+# weights are NOT sufficient for an offline start: audio-analyzer converts the
+# model to OpenVINO IR on first run, and `optimum-cli export openvino` must
+# reach the Hub API to infer the model's task. Offline, that export dies with
+# "Hugging Face Hub is not reachable and we cannot infer the task from a
+# cached model", the IR never appears, and the service crash-loops. Offline
+# mode is only safe once the IR already exists.
+cache_warm=0
+cache_checked=0
+count_warm_caches() {
+    cache_warm=0
+    cache_checked=0
+    [ -n "$PROBE_IMG" ] || return 0
+    for V in $CACHE_VOLUMES; do
+        VOL="${COMPOSE_PROJECT}_${V}"
+        docker volume inspect "$VOL" >/dev/null 2>&1 || continue
+        cache_checked=$((cache_checked + 1))
+        if docker run --rm -v "$VOL":/c:ro "$PROBE_IMG" \
+            sh -c 'find -L /c -maxdepth 8 -type f \
+                     \( -name "*.safetensors" -o -name "*.bin" -o -name "*.onnx" \
+                        -o -name "*.pt" -o -name "*.pth" -o -name "*.ckpt" \) \
+                     ! -name "*.incomplete" -size +1024k -print -quit 2>/dev/null | grep -q .' \
+            >/dev/null 2>&1; then
+            cache_warm=$((cache_warm + 1))
+        fi
+    done
+}
+
+# An explicit offline request always wins -- forcing offline is a deliberate
+# choice and this script never overrides it. In a dry run, still report
+# whether the caches can actually satisfy that request.
+if [ "$HF_HUB_OFFLINE" = "1" ]; then
+    if dry_run; then
+        select_probe_image
+        count_warm_caches
+        if [ "$cache_warm" -ge 3 ]; then
+            say "  ✓ HF_HUB_OFFLINE=1 and all 3 model caches hold real weight files"
+        else
+            say "  ⚠ HF_HUB_OFFLINE=1 but only ${cache_warm}/3 model caches hold real weight files"
+            say "    setup_models.sh does NOT pre-fetch the ASR/TTS/RAG models -- they are"
+            say "    downloaded in-container on the first online run. Starting offline with"
+            say "    a cold cache makes those services fail their healthcheck, and every"
+            say "    service gated on them aborts with 'dependency failed to start'."
+            say "    On a first run, set HF_HUB_OFFLINE=0 and TRANSFORMERS_OFFLINE=0 in .env."
+        fi
+    fi
+    printf '1\n'
+    exit 0
+fi
+
+if [ "$HF_AUTO_OFFLINE" = "false" ] || [ "$HF_AUTO_OFFLINE" = "FALSE" ]; then
+    dry_run && say "  ⚠ HF_AUTO_OFFLINE=false — egress is not probed and startup is never blocked"
+    printf '%s\n' "$HF_HUB_OFFLINE"
+    exit 0
+fi
+
+select_probe_image
 
 # Ask for the API endpoint huggingface_hub itself calls, not just the landing
 # page, so a proxy that serves the site but blocks the API is caught.
@@ -150,6 +220,14 @@ else
 fi
 
 if [ -n "$net_ok" ]; then
+    if dry_run; then
+        if [ -n "$probe_inconclusive" ]; then
+            say "  ✓ huggingface.co is reachable (probed from the host, not a container —"
+            say "    no local image to probe with, so containers may still differ)"
+        else
+            say "  ✓ huggingface.co is reachable from a container (HF_HUB_OFFLINE=0)"
+        fi
+    fi
     printf '0\n'
     exit 0
 fi
@@ -160,6 +238,13 @@ fi
 # the Hub API to infer a model's task, so the first-run IR export fails and
 # the service crash-loops. Leave the caller's value alone and say why.
 if [ -n "$probe_inconclusive" ] || [ -z "$PROBE_IMG" ] || [ -z "$PROBE_TOOL" ]; then
+    if dry_run; then
+        say "  ⚠ Could not determine whether huggingface.co is reachable"
+        say "    ${probe_reason:-no container image with curl or wget to probe with}"
+        say "    This is not a verdict and does not block startup. Pull a curl-capable"
+        say "    image for an accurate probe, or set HF_HUB_OFFLINE explicitly in .env."
+        exit 0
+    fi
     say ""
     say "[hf] Could not reliably determine whether huggingface.co is reachable:"
     say "[hf]   ${probe_reason:-no container image with curl or wget to probe with}"
@@ -173,39 +258,15 @@ fi
 
 # No egress confirmed. Decide between auto-offline and fail-fast on cache
 # contents -- but only if we were able to look properly.
-#
-# `find -L` follows the snapshot symlinks into blobs/, so an interrupted
-# download (a dangling symlink, or a *.incomplete blob) is skipped rather than
-# counted. The size floor rejects an empty models--*/ directory and truncated
-# files: a real ASR/TTS/LLM weight file is tens of MB at minimum, so 1 MiB is
-# far below any true positive while excluding configs and tokenizer JSON.
-#
-# The IR volumes are checked too, not just the HF source caches. Cached source
-# weights are NOT sufficient for an offline start: audio-analyzer converts the
-# model to OpenVINO IR on first run, and `optimum-cli export openvino` must
-# reach the Hub API to infer the model's task. Offline, that export dies with
-# "Hugging Face Hub is not reachable and we cannot infer the task from a
-# cached model", the IR never appears, and the service crash-loops. Offline
-# mode is only safe once the IR already exists.
-cache_warm=0
-cache_checked=0
-if [ -n "$PROBE_IMG" ]; then
-    for V in audio_analyzer_models text_to_speech_cache rag_service_hf_cache; do
-        VOL="${COMPOSE_PROJECT}_${V}"
-        docker volume inspect "$VOL" >/dev/null 2>&1 || continue
-        cache_checked=$((cache_checked + 1))
-        if docker run --rm -v "$VOL":/c:ro "$PROBE_IMG" \
-            sh -c 'find -L /c -maxdepth 8 -type f \
-                     \( -name "*.safetensors" -o -name "*.bin" -o -name "*.onnx" \
-                        -o -name "*.pt" -o -name "*.pth" -o -name "*.ckpt" \) \
-                     ! -name "*.incomplete" -size +1024k -print -quit 2>/dev/null | grep -q .' \
-            >/dev/null 2>&1; then
-            cache_warm=$((cache_warm + 1))
-        fi
-    done
-fi
+count_warm_caches
 
 if [ "$cache_warm" -ge 3 ]; then
+    if dry_run; then
+        say "  ⚠ huggingface.co is unreachable from a container, but all 3 model caches"
+        say "    hold real weight files — 'make up' will start with HF_HUB_OFFLINE=1"
+        say "    Probe result: ${probe_reason}"
+        exit 0
+    fi
     say ""
     say "[hf] huggingface.co is unreachable from a container:"
     say "[hf]   ${probe_reason}"
@@ -215,6 +276,20 @@ if [ "$cache_warm" -ge 3 ]; then
     say "[hf] Set HF_AUTO_OFFLINE=false to disable this."
     say ""
     printf '1\n'
+    exit 0
+fi
+
+if dry_run; then
+    say "  ✗ huggingface.co is unreachable from a container and the model caches"
+    if [ "$cache_checked" -eq 0 ]; then
+        say "    do not exist yet — 'make up' will refuse to start"
+    else
+        say "    are cold (${cache_warm}/${cache_checked} hold real weights) — 'make up' will refuse to start"
+    fi
+    say "    Probe result: ${probe_reason}"
+    say "    Set HTTP_PROXY/HTTPS_PROXY to an address routable from inside a"
+    say "    container, or warm the caches on a connected host. 'make up' prints"
+    say "    the full remediation. See docs/user-guide/troubleshooting.md."
     exit 0
 fi
 
