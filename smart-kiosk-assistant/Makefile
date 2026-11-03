@@ -483,70 +483,10 @@ check-env: ## Validate .env and all required variables before running the stack
 		echo "  $(GREEN)✓ TARGET_DEVICE=$(TARGET_DEVICE)$(NC)"; \
 	fi; \
 	\
-	HF_OFFLINE="$(HF_HUB_OFFLINE)"; \
-	PROJ="$(_COMPOSE_PROJECT)"; \
-	PROBE_IMG=""; \
-	for I in alpine:latest busybox:latest alpine busybox; do \
-		if docker image inspect "$$I" >/dev/null 2>&1; then PROBE_IMG="$$I"; break; fi; \
-	done; \
-	CACHE_WARM=0; CACHE_SEEN=0; CACHE_VERIFIED=1; \
-	for V in audio_analyzer_cache text_to_speech_cache rag_service_hf_cache; do \
-		VOL="$${PROJ}_$${V}"; \
-		docker volume inspect "$$VOL" >/dev/null 2>&1 || continue; \
-		CACHE_SEEN=$$((CACHE_SEEN+1)); \
-		if [ -n "$$PROBE_IMG" ]; then \
-			if docker run --rm -v "$$VOL":/c:ro "$$PROBE_IMG" \
-				sh -c 'find /c -maxdepth 5 \( -name "models--*" -o -name "*.safetensors" -o -name "*.bin" -o -name "*.xml" \) -print -quit 2>/dev/null | grep -q .' \
-				>/dev/null 2>&1; then \
-				CACHE_WARM=$$((CACHE_WARM+1)); \
-			fi; \
-		else \
-			CACHE_VERIFIED=0; \
-		fi; \
-	done; \
-	if [ "$$CACHE_VERIFIED" = "0" ]; then CACHE_WARM="$$CACHE_SEEN"; fi; \
-	\
-	NET_OK=""; NET_HOW=""; \
-	if [ -n "$$PROBE_IMG" ]; then \
-		NET_HOW="from a container"; \
-		if docker run --rm "$$PROBE_IMG" \
-			sh -c 'wget -q -T 4 --spider https://huggingface.co 2>/dev/null || nc -z -w 4 huggingface.co 443' \
-			>/dev/null 2>&1; then NET_OK=1; fi; \
-	else \
-		NET_HOW="from the host (no local probe image; containers may differ)"; \
-		if curl -s --connect-timeout 3 --max-time 5 -o /dev/null https://huggingface.co 2>/dev/null; then NET_OK=1; fi; \
-	fi; \
-	\
-	if [ "$$HF_OFFLINE" = "1" ]; then \
-		if [ "$$CACHE_WARM" -lt 3 ]; then \
-			echo "  $(YELLOW)⚠ HF_HUB_OFFLINE=1 but only $$CACHE_WARM/3 model caches look populated$(NC)"; \
-			if [ "$$CACHE_VERIFIED" = "0" ]; then \
-				echo "    (volume existence only — no local alpine/busybox image to inspect contents)"; \
-			fi; \
-			echo "    setup_models.sh does NOT pre-fetch the ASR/TTS/RAG models — they are"; \
-			echo "    downloaded in-container on the first online run. Starting offline with an"; \
-			echo "    empty cache makes those services fail their healthcheck, and everything"; \
-			echo "    gated on them aborts with 'dependency failed to start'."; \
-			echo "    If this is a first run, set HF_HUB_OFFLINE=0 and TRANSFORMERS_OFFLINE=0 in .env."; \
-		else \
-			echo "  $(GREEN)✓ HF_HUB_OFFLINE=1 with populated model caches$(NC)"; \
-		fi; \
-	else \
-		if [ -n "$$NET_OK" ]; then \
-			echo "  $(GREEN)✓ HF_HUB_OFFLINE=0 and huggingface.co is reachable$(NC) ($$NET_HOW)"; \
-		elif [ "$$CACHE_WARM" -ge 3 ]; then \
-			echo "  $(YELLOW)⚠ huggingface.co looked unreachable$(NC) ($$NET_HOW) — model caches look populated, so startup should still work"; \
-		else \
-			echo "  $(YELLOW)⚠ huggingface.co looked unreachable$(NC) ($$NET_HOW) and only $$CACHE_WARM/3 model caches look populated"; \
-			echo "    This is a heuristic, not a verdict — it does not block startup."; \
-			echo "    If the containers do have egress (for example a proxy configured in"; \
-			echo "    ~/.docker/config.json), ignore this and continue."; \
-			echo "    If they do not, audio-analyzer/text-to-speech will raise httpx.ConnectError"; \
-			echo "    at startup and never become healthy. Behind a proxy, set HTTP_PROXY"; \
-			echo "    and HTTPS_PROXY in your shell or .env, then re-run make up."; \
-			echo "    See docs/user-guide/troubleshooting.md."; \
-		fi; \
-	fi; \
+	HF_RESOLVE_DRY_RUN=true COMPOSE_PROJECT="$(_COMPOSE_PROJECT)" \
+		HF_HUB_OFFLINE="$(HF_HUB_OFFLINE)" HF_AUTO_OFFLINE="$(HF_AUTO_OFFLINE)" \
+		REGISTRY_REPO="$(_DOCKER_REGISTRY)" RELEASE_TAG="$(RELEASE_TAG)" \
+		./scripts/resolve-hf-offline.sh >/dev/null || true; \
 	\
 	if [ -f .env ] && grep -qE '^[[:space:]]*(export[[:space:]]+)?(HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy)[[:space:]]*=[[:space:]]*(#.*)?$$' .env; then \
 		echo "  $(RED)✗ .env has a proxy assignment with no usable value$(NC)"; \
@@ -718,6 +658,7 @@ up: check-env setup-dirs clean-metrics ## Start all services
 	@# can actually serve the run. See scripts/resolve-hf-offline.sh.
 	@set -e; \
 	HF_RESOLVED=$$(COMPOSE_PROJECT="$(_COMPOSE_PROJECT)" HF_AUTO_OFFLINE="$(HF_AUTO_OFFLINE)" \
+		REGISTRY_REPO="$(_DOCKER_REGISTRY)" RELEASE_TAG="$(RELEASE_TAG)" \
 		./scripts/resolve-hf-offline.sh); \
 	REGISTRY_REPO=$(_DOCKER_REGISTRY) \
 	HF_HUB_OFFLINE="$$HF_RESOLVED" TRANSFORMERS_OFFLINE="$$HF_RESOLVED" \

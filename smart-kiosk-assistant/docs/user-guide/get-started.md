@@ -272,6 +272,52 @@ automatically. A from-source build takes 10–20 minutes the first time.
 > named `true` and every pull fails. Change `REGISTRY` only to switch between
 > pulling and building.
 
+### Which image version you get: `RELEASE_TAG`
+
+The shipped `.env` sets `RELEASE_TAG=latest`, and every `image:` entry resolves
+to `${REGISTRY_REPO}/<service>:${RELEASE_TAG}`. With `REGISTRY=true`,
+`make build` therefore **pulls** whatever `:latest` currently points at rather
+than building the code in your checkout.
+
+This matters when you are verifying a fix. Pulling a newer repository revision
+does **not** by itself change the `audio-analyzer`, `text-to-speech`,
+`rag-service`, `kiosk-core`, `kiosk-ui`, `rtsp-streamer` or `queue-service`
+containers you run — those come from the registry. A source change only reaches
+them once the published image is rebuilt and re-tagged.
+
+If you are reproducing or validating a specific fix, pick one of these:
+
+```bash
+# A. Pin a known release tag (reproducible, recommended for validation)
+RELEASE_TAG=2026.2.0        # in .env
+make build
+make up
+
+# B. Build the local services from your checkout instead of pulling
+make build REGISTRY=false
+make up
+```
+
+Option B builds `kiosk-core`, `rag-service`, `kiosk-ui`, `rtsp-streamer` and
+`queue-service` from source (10–20 minutes the first time). `audio-analyzer`
+and `text-to-speech` live in the sibling `edge-ai-libraries` repository, so
+`REGISTRY=false` does not rebuild them: an image already present locally under
+the selected registry and tag is kept as-is (it may be your own source build
+from `edge-ai-libraries`), and only a missing one is pulled. `ovms-llm` is
+always an upstream image.
+
+To confirm what you are actually running — this reads the live container, so it
+stays correct whichever registry and tag you selected:
+
+```bash
+make show-config                # prints REGISTRY, the compose image prefix, and RELEASE_TAG
+docker inspect kiosk-core --format '{{.Config.Image}} (image ID: {{.Image}})'
+```
+
+> `RELEASE_TAG` in `.env` must match the Makefile default (`RELEASE_TAG ?= latest`)
+> unless you deliberately pin a different one. `METRICS_COLLECTOR_TAG` is
+> independent and is versioned separately.
+
 The default stack starts ten containers (`QUEUE=true` by default; identity is
 off):
 

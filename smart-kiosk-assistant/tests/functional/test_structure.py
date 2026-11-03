@@ -421,9 +421,14 @@ class TestProxyConfiguration:
         )
 
         # The inconclusive bail-out must precede the cache decision, otherwise
-        # an unverified probe still silently selects offline mode.
+        # an unverified probe still silently selects offline mode. Anchored on
+        # the *call* to count_warm_caches, not its definition.
+        assert "\ncount_warm_caches\n" in resolver, (
+            "the cache scan must be invoked as a named step so its position "
+            "relative to the inconclusive gate is checkable"
+        )
         assert resolver.index("probe_inconclusive\" ] || [ -z \"$PROBE_IMG") < \
-            resolver.index("cache_warm=0"), (
+            resolver.index("\ncount_warm_caches\n"), (
             "the inconclusive check must come BEFORE the cache evaluation; "
             "an unestablished verdict must drive no decision at all"
         )
@@ -506,3 +511,83 @@ class TestOvmsModelsBindMount:
         assert depends["ovms-cache-init"]["condition"] == "service_completed_successfully", (
             "ovms-llm must wait for ovms-cache-init to finish, not merely start"
         )
+
+
+class TestSingleHuggingFaceProbe:
+    """The HF egress/cache probe must exist in exactly one place.
+
+    `check-env` used to carry its own inline copy of this logic. The two
+    drifted: the Makefile copy probed with ``wget --spider || nc -z`` (which
+    huggingface.co rejects with 403 regardless of reachability, and which
+    cannot traverse a proxy) and inspected ``audio_analyzer_cache``, while
+    the resolver used curl and inspected ``audio_analyzer_models``. They
+    contradicted each other and reported "unreachable" on hosts that
+    demonstrably had container egress (ITEP-97604).
+    """
+
+    _RESOLVER = _KIOSK_ROOT / "scripts" / "resolve-hf-offline.sh"
+
+    @pytest.mark.tier1
+    def test_check_env_delegates_to_the_resolver(self):
+        """check-env must call the resolver rather than reimplement it."""
+        makefile = (_KIOSK_ROOT / "Makefile").read_text()
+
+        assert "HF_RESOLVE_DRY_RUN=true" in makefile, (
+            "check-env must invoke scripts/resolve-hf-offline.sh in dry-run "
+            "mode instead of carrying its own egress probe"
+        )
+        assert "--spider" not in makefile, (
+            "the Makefile must not probe huggingface.co with wget --spider: "
+            "the Hub returns 403 to busybox wget even when reachable"
+        )
+
+    @pytest.mark.tier1
+    def test_resolver_supports_a_non_blocking_dry_run(self):
+        """check-env reports; only `make up` may refuse to start."""
+        resolver = self._RESOLVER.read_text()
+
+        assert "HF_RESOLVE_DRY_RUN" in resolver, "resolver must support dry-run mode"
+        assert "dry_run()" in resolver, "dry-run must be a single shared predicate"
+
+    @pytest.mark.tier1
+    def test_cache_volume_list_is_defined_once(self):
+        """One list of cache volumes, so the two callers cannot disagree."""
+        resolver = self._RESOLVER.read_text()
+
+        assert "CACHE_VOLUMES=" in resolver, (
+            "the cache volume list must be a single named constant"
+        )
+        assert resolver.count("audio_analyzer_models text_to_speech_cache") == 1, (
+            "the cache volume list must not be duplicated"
+        )
+
+    @pytest.mark.tier1
+    def test_both_callers_pass_the_same_effective_registry(self):
+        """`check-env` and `up` must probe the same images.
+
+        The resolver picks its probe image from
+        ``$REGISTRY_REPO/<service>:$RELEASE_TAG``. If only one caller passes
+        the effective registry, ``make up REGISTRY=private.example/team``
+        makes check-env probe the custom images while `up` falls back to
+        whatever REGISTRY_REPO happens to be in .env -- so the two can reach
+        opposite conclusions about the very same host.
+        """
+        makefile = (_KIOSK_ROOT / "Makefile").read_text()
+
+        invocations = [
+            block
+            for block in makefile.split("./scripts/resolve-hf-offline.sh")[:-1]
+        ]
+        assert len(invocations) == 2, (
+            "expected exactly two resolver invocations (check-env and up), "
+            f"found {len(invocations)}"
+        )
+
+        for block in invocations:
+            # Only the environment assignments immediately preceding the call.
+            env = block[-400:]
+            for var in ("REGISTRY_REPO=", "RELEASE_TAG="):
+                assert var in env, (
+                    f"every resolve-hf-offline.sh invocation must pass {var} "
+                    "so check-env and up select the same probe image"
+                )
