@@ -211,8 +211,23 @@ def ensure_static_ir(ir_path: str, model_cfg=None) -> str:
 
     static_path = os.path.splitext(ir_path)[0] + "_static.xml"
     if os.path.isfile(static_path):
-        logger.info("Using static IR: %s", static_path)
-        return static_path
+        # A static IR left over from an earlier export of a different head
+        # (e.g. raw 84x8400 vs end-to-end 300x6) silently yields zero
+        # detections, so only reuse it if it is at least as new as the source
+        # graph (.xml) and weights (.bin).
+        source_mtime = os.path.getmtime(ir_path)
+        source_bin = os.path.splitext(ir_path)[0] + ".bin"
+        if os.path.isfile(source_bin):
+            source_mtime = max(source_mtime, os.path.getmtime(source_bin))
+        if os.path.getmtime(static_path) >= source_mtime:
+            logger.info("Using static IR: %s", static_path)
+            return static_path
+        logger.warning("Static IR %s is older than %s; regenerating", static_path, ir_path)
+        for ext in (".xml", ".bin"):
+            try:
+                os.remove(os.path.splitext(static_path)[0] + ext)
+            except OSError:
+                pass
 
     try:
         core = ov.Core()
