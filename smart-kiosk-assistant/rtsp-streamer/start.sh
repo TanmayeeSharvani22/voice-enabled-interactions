@@ -6,6 +6,19 @@ RTSP_PORT=${RTSP_PORT:-8554}
 FFMPEG_BIN=${FFMPEG_BIN:-ffmpeg}
 MEDIAMTX_BIN=${MEDIAMTX_BIN:-/opt/rtsp-streamer/mediamtx}
 
+# mediamtx discovers mediamtx.yml relative to its working directory, and also
+# writes auto-generated TLS material there: the native MoQ/QUIC listener added
+# in mediamtx v1.20.0 creates auto.key/auto.crt in the CWD on every start.
+# Compose runs this container as uid 1000 (docker-compose.yml), so if the image
+# ships a root-owned WORKDIR that write fails and mediamtx aborts with
+# "failed to save TLS key to auto.key: permission denied" ->
+# "unable to load TLS keypair for native MoQ QUIC listener", closing every
+# listener including RTSP. Launching from a writable directory with an explicit
+# config path removes both the discovery and the writability dependency, so the
+# same script works on any mediamtx version and any image ownership scheme.
+MEDIAMTX_CONFIG=${MEDIAMTX_CONFIG:-/opt/rtsp-streamer/mediamtx.yml}
+MEDIAMTX_RUN_DIR=${MEDIAMTX_RUN_DIR:-/tmp}
+
 # Logging helper — prefixes every message with ISO timestamp and [rtsp-streamer]
 log() {
   echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') [rtsp-streamer] $*"
@@ -192,7 +205,35 @@ else
 fi
 
 log "Starting mediamtx RTSP server on port $RTSP_PORT ..."
-"$MEDIAMTX_BIN" >/tmp/mediamtx.log 2>&1 &
+# Run from MEDIAMTX_RUN_DIR with an explicit config path so mediamtx never
+# depends on the WORKDIR being writable (see MEDIAMTX_RUN_DIR above). `exec`
+# replaces the subshell, so $! remains mediamtx's own PID for the liveness
+# check below. Fall back to the historical invocation if either precondition
+# is missing, so an image laying the config out differently still starts.
+if [ -f "$MEDIAMTX_CONFIG" ] && [ -w "$MEDIAMTX_RUN_DIR" ]; then
+  log "mediamtx config=$MEDIAMTX_CONFIG cwd=$MEDIAMTX_RUN_DIR"
+  (
+    # Both values were validated against the *current* directory, so any
+    # relative override (MEDIAMTX_BIN=./mediamtx, MEDIAMTX_CONFIG=mediamtx.yml)
+    # would silently re-resolve under MEDIAMTX_RUN_DIR after the cd and fail
+    # even though the files exist. Anchor them here, while the original CWD is
+    # still in effect. A binary name with no slash at all is left untouched so
+    # PATH lookup -- which does not depend on the CWD -- keeps working.
+    case "$MEDIAMTX_BIN" in
+      /*) ;;
+      */*) MEDIAMTX_BIN="$(pwd)/$MEDIAMTX_BIN" ;;
+    esac
+    case "$MEDIAMTX_CONFIG" in
+      /*) ;;
+      *) MEDIAMTX_CONFIG="$(pwd)/$MEDIAMTX_CONFIG" ;;
+    esac
+    cd "$MEDIAMTX_RUN_DIR" && exec "$MEDIAMTX_BIN" "$MEDIAMTX_CONFIG"
+  ) >/tmp/mediamtx.log 2>&1 &
+else
+  log "WARN config $MEDIAMTX_CONFIG or writable dir $MEDIAMTX_RUN_DIR unavailable; starting mediamtx from $(pwd)" >&2
+  "$MEDIAMTX_BIN" >/tmp/mediamtx.log 2>&1 &
+fi
+
 mediamtx_pid=$!
 pids="$mediamtx_pid"
 log "mediamtx started (PID=$mediamtx_pid)"
