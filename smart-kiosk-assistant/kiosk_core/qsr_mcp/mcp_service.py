@@ -140,22 +140,24 @@ def init(force: bool = False) -> None:
         # Outbound autonomy push to the Central QSR Agent; built only when the
         # URL is configured, so the default stack performs no outbound
         # delivery at all.
-        _autonomy_delivery = (
-            Delivery(
-                sinks=[
-                    AutonomyEventSink(
-                        cfg.QSR_AUTONOMY_EVENTS_URL,
-                        store_id=cfg.QSR_AUTONOMY_STORE_ID,
-                        token=cfg.QSR_AUTONOMY_EVENTS_TOKEN,
-                        event_types=cfg.QSR_AUTONOMY_EVENT_TYPES,
-                        queue_min_delta=cfg.QSR_AUTONOMY_QUEUE_MIN_DELTA,
-                        timeout_s=cfg.QSR_AUTONOMY_TIMEOUT_SECONDS,
-                    )
-                ]
+        autonomy_sink = (
+            AutonomyEventSink(
+                cfg.QSR_AUTONOMY_EVENTS_URL,
+                store_id=cfg.QSR_AUTONOMY_STORE_ID,
+                token=cfg.QSR_AUTONOMY_EVENTS_TOKEN,
+                event_types=cfg.QSR_AUTONOMY_EVENT_TYPES,
+                queue_min_delta=cfg.QSR_AUTONOMY_QUEUE_MIN_DELTA,
+                queue_smoothing_samples=cfg.QSR_AUTONOMY_QUEUE_SMOOTHING_SAMPLES,
+                queue_min_interval_s=cfg.QSR_AUTONOMY_QUEUE_MIN_INTERVAL_SECONDS,
+                queue_confirm_s=cfg.QSR_AUTONOMY_QUEUE_CONFIRM_SECONDS,
+                timeout_s=cfg.QSR_AUTONOMY_TIMEOUT_SECONDS,
             )
             if cfg.QSR_AUTONOMY_EVENTS_URL and MCP_SERVICE_ENABLED
             else None
         )
+        if autonomy_sink is not None:
+            _restore_queue_state(autonomy_sink, _log)
+        _autonomy_delivery = Delivery(sinks=[autonomy_sink]) if autonomy_sink is not None else None
 
         # One FIFO worker per destination: emit() stays non-blocking, while
         # delivery order (and therefore the agent's view of "latest queue
@@ -207,6 +209,39 @@ def _ensure_init() -> None:
     """Initialise on first use, so a direct tool call works standalone."""
     if not _initialised:
         init()
+
+
+def _restore_queue_state(sink: AutonomyEventSink, log: DurableLog) -> None:
+    """Resume queue change detection from the latest recent logged sample."""
+    window_s = cfg.QSR_AUTONOMY_QUEUE_CONFIRM_SECONDS or 300.0
+    try:
+        recent = log.read(
+            event_type="queue_depth_sample",
+            since_ts_ms=int((time.time() - window_s) * 1000),
+            limit=None,
+        )
+    except Exception:
+        logger.exception("[QSR-MCP] Could not read the last queue sample")
+        return
+    if recent:
+        last = recent[-1]
+        sink.restore_queue_state(last.payload.get("count"), last.ts_ms)
+
+
+def stale_queue_reason(snapshot: dict[str, Any]) -> str | None:
+    """Why a queue-service snapshot is too old to use, or ``None`` if fresh.
+
+    queue-service refreshes ``timestamp`` on every processed frame, so an old
+    one means the camera stream stopped and the count no longer describes
+    the queue.
+    """
+    timestamp = snapshot.get("timestamp")
+    if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)):
+        return None
+    age = time.time() - timestamp
+    if age <= cfg.QSR_QUEUE_MAX_AGE_SECONDS:
+        return None
+    return f"queue-service has processed no camera frame for {age:.0f}s"
 
 
 def get_queue_client() -> QueueClient | None:
@@ -385,6 +420,9 @@ def get_queue_depth() -> dict[str, Any]:
     snapshot = client.get_queue_snapshot()
     if snapshot is None:
         return {"available": False, "reason": "queue-service unreachable"}
+    stale = stale_queue_reason(snapshot)
+    if stale:
+        return {"available": False, "reason": stale}
     return {"available": True, **snapshot}
 
 

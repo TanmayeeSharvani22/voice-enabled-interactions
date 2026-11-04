@@ -11,6 +11,10 @@ source:
   # Override at runtime: QUEUE_SERVICE__SOURCE__RTSP_URL=rtsp://rtsp-streamer:8554/<name>
   rtsp_url: "rtsp://rtsp-streamer:8554/queue"
   rtsp_transport: "tcp"
+  # Reconnect when no frame has been processed for this many seconds. A closed
+  # RTSP connection is reported only as a warning, after which the pipeline
+  # would wait forever and keep serving the last count. 0 disables.
+  stall_timeout_seconds: 30
   # rtspsrc jitter-buffer size in milliseconds. GStreamer defaults to 2000 ms,
   # which adds a fixed two-second delay to the live feed. The source is a
   # container-local RTSP server, so only a few frames of de-jitter are needed.

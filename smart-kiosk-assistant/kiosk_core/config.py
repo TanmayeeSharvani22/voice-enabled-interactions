@@ -1175,10 +1175,35 @@ QSR_AUTONOMY_TIMEOUT_SECONDS = float(
 # forwarded. The agent's contract states the producer owns change detection
 # ("The autonomy process has no source polling loop"), but our poller samples
 # on a fixed interval, so without this every QSR_MCP_QUEUE_POLL_SECONDS tick
-# would POST an event. 1 = forward on any change; raise it to suppress
-# single-person jitter on a busy store.
+# would POST an event. A camera count jitters by a person or two, and each
+# event costs the agent a model run and the operator a review, so the default
+# is 3.
 QSR_AUTONOMY_QUEUE_MIN_DELTA = int(
-    os.getenv("KIOSK_CORE_QSR_AUTONOMY_QUEUE_MIN_DELTA", "1")
+    os.getenv("KIOSK_CORE_QSR_AUTONOMY_QUEUE_MIN_DELTA", "3")
+)
+
+# The queue depth compared and forwarded is the median of this many polls, so
+# a miscounted frame or a person walking past is not a change.
+QSR_AUTONOMY_QUEUE_SMOOTHING_SAMPLES = int(
+    os.getenv("KIOSK_CORE_QSR_AUTONOMY_QUEUE_SMOOTHING_SAMPLES", "3")
+)
+
+# Minimum seconds between two queue_count_changed events.
+QSR_AUTONOMY_QUEUE_MIN_INTERVAL_SECONDS = float(
+    os.getenv("KIOSK_CORE_QSR_AUTONOMY_QUEUE_MIN_INTERVAL_SECONDS", "120")
+)
+
+# After a change, resend the queue depth once after this many seconds without
+# another event, so the agent sees whether a long queue persists or a recovery
+# holds. 0 disables.
+QSR_AUTONOMY_QUEUE_CONFIRM_SECONDS = float(
+    os.getenv("KIOSK_CORE_QSR_AUTONOMY_QUEUE_CONFIRM_SECONDS", "300")
+)
+
+# A queue-service reading older than this is treated as unavailable: the
+# camera stream has stalled, so the count no longer describes the queue.
+QSR_QUEUE_MAX_AGE_SECONDS = float(
+    os.getenv("KIOSK_CORE_QSR_QUEUE_MAX_AGE_SECONDS", "60")
 )
 
 # Kiosk operating settings the QSR agent reads in get_kiosk_context and changes

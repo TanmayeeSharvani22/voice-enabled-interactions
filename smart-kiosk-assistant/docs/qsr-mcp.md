@@ -257,10 +257,25 @@ polled. It mirrors the pattern in order-accuracy#214.
 
 The agent's `autonomy` process has no source polling loop — per its
 `SERVICE_OWNER_GUIDE`, **the event producer owns change detection and
-delivery**. The kiosk's queue poller samples on a fixed interval, so
-`AutonomyEventSink` suppresses unchanged samples and only forwards a
-`queue_count_changed` when the count moves by at least
-`KIOSK_CORE_QSR_AUTONOMY_QUEUE_MIN_DELTA`.
+delivery**. The kiosk's queue poller samples on a fixed interval, and a camera
+count jitters by a person or two, while every forwarded event costs the agent
+a model run and the operator a review. `AutonomyEventSink` therefore takes the
+queue depth as the median of the last `QUEUE_SMOOTHING_SAMPLES` polls (a
+miscounted frame or a person walking past is not a change) and forwards a
+`queue_count_changed` only when that depth moved by `QUEUE_MIN_DELTA` or more
+and at least `QUEUE_MIN_INTERVAL_SECONDS` passed since the last queue event.
+The forwarded sample is the latest one at the median, so `count`, `nearby`,
+`status` and `estimated_wait_minutes` describe the same reading.
+
+`QUEUE_CONFIRM_SECONDS` after a change, the depth is resent once, so the agent
+sees whether a long queue persists or a recovery holds (`previous_queue_count`
+and `queue_count` both low). After a restart, change detection resumes from the
+last logged sample, so a restart does not send an event by itself.
+
+queue-service refreshes its reading's `timestamp` on every processed frame. A
+reading older than `KIOSK_CORE_QSR_QUEUE_MAX_AGE_SECONDS` means the camera
+stream has stalled: it is not logged or forwarded, and `get_queue_depth` and
+`get_kiosk_context` report the queue as unavailable.
 
 **Flow** — `emit()` writes to the durable log first (authoritative), then
 hands the event to a background FIFO worker per destination. Delivery is
@@ -318,7 +333,11 @@ retries — resending a payload the agent refuses to parse cannot succeed.
 | `KIOSK_CORE_QSR_AUTONOMY_EVENTS_TOKEN` | *(empty)* | Optional bearer token |
 | `KIOSK_CORE_QSR_AUTONOMY_STORE_ID` | `qsr-001` | Must equal the agent's `QSR_RESTAURANT_ID` or events are rejected. Deliberately separate from `KIOSK_CORE_QSR_MCP_STORE_ID`, which only labels our own durable log. |
 | `KIOSK_CORE_QSR_AUTONOMY_EVENT_TYPES` | `queue_depth_sample,board_mode_changed` | Which internal events to forward |
-| `KIOSK_CORE_QSR_AUTONOMY_QUEUE_MIN_DELTA` | `1` | Minimum queue-count change before forwarding |
+| `KIOSK_CORE_QSR_AUTONOMY_QUEUE_MIN_DELTA` | `3` | Minimum change of the queue depth before forwarding |
+| `KIOSK_CORE_QSR_AUTONOMY_QUEUE_SMOOTHING_SAMPLES` | `3` | Polls whose median is the queue depth |
+| `KIOSK_CORE_QSR_AUTONOMY_QUEUE_MIN_INTERVAL_SECONDS` | `120` | Minimum time between queue events |
+| `KIOSK_CORE_QSR_AUTONOMY_QUEUE_CONFIRM_SECONDS` | `300` | Resend the depth once this long after a change; `0` disables |
+| `KIOSK_CORE_QSR_QUEUE_MAX_AGE_SECONDS` | `60` | Older queue-service readings are treated as unavailable |
 | `KIOSK_CORE_QSR_AUTONOMY_TIMEOUT_SECONDS` | `5.0` | Per-request timeout |
 | `KIOSK_CORE_QSR_EXTRA_NO_PROXY` | *(empty)* | Appended to kiosk-core's `NO_PROXY`. **Required behind a corporate proxy**, since the agent runs on another machine. Python's `urllib` matches `no_proxy` by suffix, *not* CIDR — list the host name or exact IP. |
 
@@ -337,7 +356,8 @@ local kiosk simulation.
 
 The agent proposes these actions and calls them only after an operator approves.
 Forwarded events carry `"service": "kiosk"`; `queue_count_changed` also carries
-`previous_queue_count` and `estimated_wait_minutes`.
+`previous_queue_count` (the depth in the previous queue event) and
+`estimated_wait_minutes`.
 
 With a live agent, set `KIOSK_CORE_QSR_AUTONOMY_EVENT_TYPES=queue_depth_sample`:
 otherwise each board change the agent applies comes back to it as a

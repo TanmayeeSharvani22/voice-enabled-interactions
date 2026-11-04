@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -152,6 +153,7 @@ class QueuePipeline:
         self._reconnect_delay = float(source_cfg.get("reconnect_delay_seconds", 5.0))
         max_retries = source_cfg.get("max_reconnect_attempts")
         self._max_retries = int(max_retries) if max_retries is not None else None
+        self._stall_timeout = float(source_cfg.get("stall_timeout_seconds", 30.0))
 
         debug_cfg = self._config.get("debug", {}) or {}
         self._debug = bool(debug_cfg.get("visualization", False))
@@ -183,6 +185,7 @@ class QueuePipeline:
         self._retries = 0
         self._reconnecting = False
         self._stopping = False
+        self._started_at = 0.0
 
     # ── configuration helpers ────────────────────────────────────────────────
 
@@ -779,6 +782,8 @@ class QueuePipeline:
         if self.pipeline is None:
             self.build()
         self._install_signal_handlers()
+        if self._stall_timeout > 0:
+            GLib.timeout_add_seconds(max(1, int(self._stall_timeout / 3)), self._check_stall)
         self._start()
         try:
             self.loop.run()
@@ -786,6 +791,7 @@ class QueuePipeline:
             self.stop()
 
     def _start(self) -> None:
+        self._started_at = time.time()
         ret = self.pipeline.set_state(Gst.State.PLAYING)
         if ret == Gst.StateChangeReturn.FAILURE:
             logger.error("Failed to set pipeline to PLAYING")
@@ -840,6 +846,28 @@ class QueuePipeline:
                 if new == Gst.State.PLAYING:
                     self._retries = 0
         return True
+
+    def _seconds_without_frames(self, now: float) -> float:
+        """Time since the last counted frame, or since the pipeline started."""
+        import queue_state
+
+        return now - max(queue_state.get()["timestamp"], self._started_at)
+
+    def _check_stall(self) -> bool:
+        """Reconnect when frames stop without an ERROR or EOS.
+
+        When the RTSP server closes the connection, rtspsrc reports only a
+        WARNING and the pipeline then waits forever, while the API keeps
+        serving the last count as if the queue were still being watched.
+        """
+        if self._stopping:
+            return GLib.SOURCE_REMOVE
+        if self.pipeline is not None and not self._reconnecting:
+            idle = self._seconds_without_frames(time.time())
+            if idle > self._stall_timeout:
+                logger.warning("No frame for %.0fs; reconnecting to the RTSP source", idle)
+                self._schedule_reconnect()
+        return GLib.SOURCE_CONTINUE
 
     def _schedule_reconnect(self) -> None:
         if self._stopping or self._reconnecting:

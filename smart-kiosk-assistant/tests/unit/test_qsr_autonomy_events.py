@@ -15,7 +15,7 @@ import pytest
 
 from kiosk_core.qsr_mcp.autonomy import AutonomyEventSink, PermanentDeliveryError
 from kiosk_core.qsr_mcp.delivery import BackgroundDispatcher, Delivery, WebhookSink
-from kiosk_core.qsr_mcp.event_log import new_event
+from kiosk_core.qsr_mcp.event_log import EventEnvelope, new_event
 
 URL = "http://qsr-agent:8600/autonomy/events"
 
@@ -154,6 +154,96 @@ def test_unusable_queue_counts_are_dropped(bad_count):
     post = RecordingPost()
     assert make_delivery(post).dispatch(queue_event(bad_count)) is True
     assert post.calls == []
+
+
+def sample_at(seconds, count, nearby=0):
+    """A queue sample taken ``seconds`` into the run."""
+    return EventEnvelope(
+        event_type="queue_depth_sample",
+        service="smart_kiosk",
+        store_id="store-001",
+        payload={"count": count, "nearby": nearby, "status": "LOW" if count <= 3 else "HIGH"},
+        ts_ms=int(seconds * 1000),
+    )
+
+
+def run_samples(delivery, counts, every_s=30):
+    """Dispatch one sample per 30 s poll."""
+    for i, count in enumerate(counts):
+        delivery.dispatch(sample_at(i * every_s, count, nearby=i))
+
+
+def sent(post):
+    return [c["body"]["data"]["queue_count"] for c in post.calls]
+
+
+def smoothed(post, **kwargs):
+    kwargs.setdefault("queue_min_delta", 3)
+    kwargs.setdefault("queue_smoothing_samples", 3)
+    return make_delivery(post, **kwargs)
+
+
+def test_camera_jitter_is_not_a_queue_change():
+    """Measured on a live feed of a two-person queue: 2-5 within seconds."""
+    post = RecordingPost()
+    run_samples(smoothed(post), [2, 3, 3, 2, 4, 3, 2, 3, 5, 2, 3, 3])
+
+    assert sent(post) == [3]
+
+
+def test_a_lasting_change_is_forwarded_as_the_median_sample():
+    post = RecordingPost()
+    run_samples(smoothed(post), [2, 2, 2, 8, 8, 7])
+
+    assert sent(post) == [2, 8]
+    data = post.calls[1]["body"]["data"]
+    assert (data["previous_queue_count"], data["count"]) == (2, 8)
+    assert data["nearby"] == 4, "fields come from the latest sample at the median"
+
+
+def test_a_single_spike_is_not_forwarded():
+    post = RecordingPost()
+    run_samples(smoothed(post), [2, 2, 2, 9, 2, 2])
+
+    assert sent(post) == [2]
+
+
+def test_queue_events_respect_the_minimum_interval():
+    post = RecordingPost()
+    delivery = make_delivery(post, queue_min_interval_s=120)
+
+    run_samples(delivery, [2, 12, 12, 12, 12])
+
+    assert sent(post) == [2, 12]
+    assert post.calls[1]["body"]["occurred_at"].startswith("1970-01-01T00:02:00")
+
+
+def test_a_change_is_confirmed_once_then_quiet():
+    post = RecordingPost()
+    run_samples(smoothed(post, queue_confirm_s=300), [8, 8, 8, 2, 2] + [2] * 30)
+
+    assert sent(post) == [8, 2, 2], "the drop, then one confirmation"
+    confirm = post.calls[2]["body"]["data"]
+    assert (confirm["previous_queue_count"], confirm["queue_count"]) == (2, 2)
+
+
+def test_an_unchanged_queue_is_not_repeated():
+    post = RecordingPost()
+    run_samples(smoothed(post, queue_confirm_s=300), [8] * 30)
+
+    assert sent(post) == [8]
+
+
+def test_a_restart_resumes_from_the_last_logged_sample():
+    post = RecordingPost()
+    sink = make_sink(post, queue_min_delta=3, queue_smoothing_samples=3)
+    sink.restore_queue_state(12, 0)
+    delivery = Delivery(sinks=[sink], backoff_s=0)
+
+    run_samples(delivery, [12, 11, 12, 3, 3])
+
+    assert sent(post) == [3], "an unchanged queue after a restart is not news"
+    assert post.calls[0]["body"]["data"]["previous_queue_count"] == 12
 
 
 def test_board_mode_events_are_never_change_filtered():

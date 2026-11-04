@@ -94,3 +94,37 @@ def test_queues_are_leaky_downstream_and_shallow():
 
 def test_queue_element_token_maps_to_a_real_gstreamer_element():
     assert QueuePipeline._element_name(pipeline._QUEUE_TYPE) == "queue"
+
+
+# ── frame watchdog ──────────────────────────────────────────────────────────
+
+def _watched(monkeypatch, last_frame, started_at, now=1000.0):
+    import queue_state
+
+    monkeypatch.setattr(queue_state, "get", lambda: {"timestamp": last_frame})
+    monkeypatch.setattr(pipeline.time, "time", lambda: now)
+    obj = _new(_stall_timeout=30.0, _stopping=False, _reconnecting=False,
+               _started_at=started_at, pipeline=object())
+    obj.reconnects = 0
+    obj._schedule_reconnect = lambda: setattr(obj, "reconnects", obj.reconnects + 1)
+    return obj
+
+
+def test_stalled_frames_trigger_a_reconnect(monkeypatch):
+    """A server-closed RTSP connection is only a WARNING; without this the
+    pipeline waits forever and the API serves the last count as current."""
+    obj = _watched(monkeypatch, last_frame=900.0, started_at=800.0)
+    assert QueuePipeline._check_stall(obj) is pipeline.GLib.SOURCE_CONTINUE
+    assert obj.reconnects == 1
+
+
+def test_flowing_frames_do_not_reconnect(monkeypatch):
+    obj = _watched(monkeypatch, last_frame=990.0, started_at=800.0)
+    QueuePipeline._check_stall(obj)
+    assert obj.reconnects == 0
+
+
+def test_a_new_pipeline_gets_time_to_deliver_its_first_frame(monkeypatch):
+    obj = _watched(monkeypatch, last_frame=0.0, started_at=990.0)
+    QueuePipeline._check_stall(obj)
+    assert obj.reconnects == 0
