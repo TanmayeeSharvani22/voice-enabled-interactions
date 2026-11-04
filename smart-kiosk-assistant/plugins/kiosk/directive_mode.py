@@ -212,6 +212,28 @@ def collect_act_blocks(text: str) -> tuple[list[str], bool]:
     return bodies, True
 
 
+# Words that don't identify an item on their own, so they can't count as the
+# customer, the reply or an earlier turn naming it.
+_GENERIC_ITEM_WORDS = frozenset(
+    w.rstrip("s") for w in "a an and the of with meal combo piece pc order kids regular".split()
+)
+
+
+def _item_words(text: str) -> set[str]:
+    return {w.rstrip("s") for w in re.findall(r"[a-z]+", (text or "").lower())}
+
+
+def item_is_named(item_name: str, *texts: str) -> bool:
+    """True if any distinctive word of ``item_name`` appears in ``texts``."""
+    item = _item_words(item_name) - _GENERIC_ITEM_WORDS
+    if not item:
+        return True
+    said: set[str] = set()
+    for text in texts:
+        said |= _item_words(text)
+    return bool(item & said)
+
+
 # Verbs the parser accepts. Anything else is treated as unparseable and falls
 # back, rather than being guessed at.
 _ADD, _REMOVE, _CONFIRM = "add", "remove", "confirm"
@@ -809,6 +831,23 @@ async def run_turn(
         """Run every collected <act> block as one combined directive."""
         state["tag_dispatched"] = True
         actions = parse_directive(";".join(b.strip() for b in bodies))
+        if actions and len(actions) > 1:
+            # Drop an item from an earlier turn that nobody named this turn:
+            # the model re-adding something already ordered. An unnamed item
+            # new to the conversation is kept, because the customer may have
+            # used an alias ("a kids combo").
+            spoken = " ".join(state["spoken"] + state["held_confirm"])
+            earlier = " ".join(t.get("content", "") for t in history or [])
+            named = [
+                a for a in actions
+                if "name" not in a
+                or item_is_named(a["name"], message, spoken)
+                or not item_is_named(a["name"], earlier)
+            ]
+            if named and len(named) < len(actions):
+                logger.info("[DIRECTIVE] dropped item(s) nobody said: %r",
+                            [a.get("name") for a in actions if a not in named])
+                actions = named
         if actions:
             actions = apply_one_more(actions, message)
             state["task"] = asyncio.create_task(_execute(actions, user_id))

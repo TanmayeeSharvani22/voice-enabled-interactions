@@ -51,13 +51,13 @@ def _make_fake_stream(full_text: str):
     return _fake_stream
 
 
-def _run_turn(message: str, spoken: list[str]):
+def _run_turn(message: str, spoken: list[str], history: list[dict[str, str]] | None = None):
     """Invoke ``run_turn`` with throwaway prompt context, collecting prose."""
     return asyncio.run(
         directive_mode.run_turn(
             message=message,
             user_id="user-1",
-            history=None,
+            history=history,
             menu_block="Classic Chicken Burger — ₹189",
             base_instruction="You are a kiosk.",
             on_safe_sentence=spoken.append,
@@ -486,3 +486,95 @@ def test_one_more_adds_one_when_the_model_writes_the_new_total(monkeypatch):
     assert [(a["verb"], a["name"], a["quantity"]) for a in actions] == [
         ("add", "Chocolate Shake", 1),
     ]
+
+
+# ── Re-added items from earlier turns ─────────────────────────────────────────
+_BURGER_TURN = [
+    {"role": "user", "content": "I'd like a Classic Chicken Burger."},
+    {"role": "assistant", "content": "Got it. One Classic Chicken Burger."},
+]
+
+
+def _ok_execute():
+    return AsyncMock(
+        return_value=({"total": 9.0, "upsell_suggestions": []}, ["place_order"], ["place_order"])
+    )
+
+
+def test_item_from_an_earlier_turn_nobody_named_is_dropped(monkeypatch):
+    # Turn 2 asks only for a pizza. Copying the prompt's multi-item example,
+    # the model also re-adds the burger from turn 1, so the cart got two.
+    monkeypatch.setattr(
+        directive_mode,
+        "stream_completion",
+        _make_fake_stream(
+            "Got it. A Margherita Pizza."
+            "<act>add|Classic Chicken Burger|1;add|Margherita Pizza|1</act>"
+        ),
+    )
+    execute = _ok_execute()
+    monkeypatch.setattr(directive_mode, "_execute", execute)
+
+    result = _run_turn("And a margherita pizza.", [], history=_BURGER_TURN)
+
+    assert result is not None
+    actions = execute.await_args.args[0]
+    assert [(a["verb"], a["name"], a["quantity"]) for a in actions] == [
+        ("add", "Margherita Pizza", 1),
+    ]
+
+
+def test_earlier_item_named_again_this_turn_is_kept(monkeypatch):
+    monkeypatch.setattr(
+        directive_mode,
+        "stream_completion",
+        _make_fake_stream(
+            "Got it. Another burger and a pizza."
+            "<act>add|Classic Chicken Burger|1;add|Margherita Pizza|1</act>"
+        ),
+    )
+    execute = _ok_execute()
+    monkeypatch.setattr(directive_mode, "_execute", execute)
+
+    result = _run_turn("Another chicken burger and a margherita pizza.", [], history=_BURGER_TURN)
+
+    assert result is not None
+    assert [a["name"] for a in execute.await_args.args[0]] == [
+        "Classic Chicken Burger",
+        "Margherita Pizza",
+    ]
+
+
+def test_unnamed_item_new_to_the_conversation_is_kept(monkeypatch):
+    # "a kids combo" names no word of the menu item, but nothing earlier
+    # ordered it, so it is the customer's alias, not a re-add.
+    monkeypatch.setattr(
+        directive_mode,
+        "stream_completion",
+        _make_fake_stream(
+            "Got it. A Little Ranger Meal and a pizza."
+            "<act>add|Little Ranger Meal|1;add|Margherita Pizza|1</act>"
+        ),
+    )
+    execute = _ok_execute()
+    monkeypatch.setattr(directive_mode, "_execute", execute)
+
+    result = _run_turn("A kids combo and a margherita pizza.", [], history=_BURGER_TURN)
+
+    assert result is not None
+    assert len(execute.await_args.args[0]) == 2
+
+
+def test_single_item_turn_is_never_filtered(monkeypatch):
+    monkeypatch.setattr(
+        directive_mode,
+        "stream_completion",
+        _make_fake_stream("Got it. One more.<act>add|Classic Chicken Burger|1</act>"),
+    )
+    execute = _ok_execute()
+    monkeypatch.setattr(directive_mode, "_execute", execute)
+
+    result = _run_turn("Same again, please.", [], history=_BURGER_TURN)
+
+    assert result is not None
+    assert [a["name"] for a in execute.await_args.args[0]] == ["Classic Chicken Burger"]
