@@ -18,6 +18,7 @@ person detector.
 """
 import sys
 
+import pytest
 import yaml
 
 import model_manager
@@ -79,3 +80,52 @@ def test_existing_metadata_is_not_overwritten(tmp_path):
     model_manager.ensure_yolo_metadata(str(ir))
 
     assert yaml.safe_load(existing.read_text(encoding="utf-8"))["names"] == {0: "staff"}
+
+
+def test_write_failure_aborts_startup(tmp_path, monkeypatch):
+    """A read-only model dir must fail loudly, not serve a blind pipeline.
+
+    Returning normally here would let main() start the HTTP API while the
+    pipeline fails to initialise, so /health would pass while nothing is
+    detected -- exactly the blind spot that hid this regression.
+    """
+    ir = _write_ir(tmp_path, "yolo26n_static")
+
+    def _boom(*args, **kwargs):
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(model_manager.tempfile, "mkstemp", _boom)
+
+    with pytest.raises(RuntimeError, match="metadata"):
+        model_manager.ensure_yolo_metadata(str(ir))
+
+
+def test_concurrent_creation_keeps_the_winner(tmp_path, monkeypatch):
+    """Two instances racing on a shared model dir: first writer wins.
+
+    The publish must not clobber the other file, and must not raise -- the
+    metadata is present, which is all the caller needs.
+    """
+    ir = _write_ir(tmp_path, "yolo26n_static")
+    rival = tmp_path / "metadata.yaml"
+    real_mkstemp = model_manager.tempfile.mkstemp
+
+    def _mkstemp_then_race(*args, **kwargs):
+        # Appears after the is_file() check, before our publish.
+        rival.write_text("task: detect\nnames:\n  0: rival\n", encoding="utf-8")
+        return real_mkstemp(*args, **kwargs)
+
+    monkeypatch.setattr(model_manager.tempfile, "mkstemp", _mkstemp_then_race)
+
+    assert model_manager.ensure_yolo_metadata(str(ir)) == str(ir)
+
+    assert yaml.safe_load(rival.read_text(encoding="utf-8"))["names"] == {0: "rival"}
+
+
+def test_no_staging_files_left_behind(tmp_path):
+    """The staged temp file must not linger next to the IR."""
+    ir = _write_ir(tmp_path, "yolo26n_static")
+
+    model_manager.ensure_yolo_metadata(str(ir))
+
+    assert not [p.name for p in tmp_path.iterdir() if p.name.startswith(".metadata-")]

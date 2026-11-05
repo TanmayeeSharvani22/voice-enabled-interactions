@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import shutil
+import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -246,6 +247,12 @@ def ensure_yolo_metadata(ir_path: str) -> str:
 
     Returns:
         ``ir_path`` unchanged, so this composes with the other ensure_* steps.
+
+    Raises:
+        RuntimeError: The metadata is missing and could not be written. The
+            pipeline cannot start without it, so this aborts startup rather
+            than leaving a service whose /health passes while it detects
+            nothing.
     """
     if not _is_yolo_model(ir_path):
         return ir_path
@@ -264,16 +271,36 @@ def ensure_yolo_metadata(ir_path: str) -> str:
         "imgsz": _yolo_imgsz(ir_path),
         "names": _yolo_labels(ir_path),
     }
+    # Stage in the same directory so the publish step is a same-filesystem
+    # rename-equivalent: a torn write can never be mistaken for a complete
+    # file by the next startup. os.link (not os.replace) is the publish
+    # primitive because it fails rather than clobbering a metadata.yaml that
+    # appeared in the meantime -- the same invariant as the is_file() check
+    # above, held across the write.
+    tmp_name = None
     try:
-        with open(metadata_path, "w", encoding="utf-8") as fh:
-            yaml.safe_dump(metadata, fh, sort_keys=False)
-    except OSError as exc:
-        logger.warning(
-            "Could not write %s (%s); DL Streamer 2026.3+ will refuse to "
-            "initialise gvainference for this YOLO model",
-            metadata_path, exc,
+        tmp_fd, tmp_name = tempfile.mkstemp(
+            dir=metadata_path.parent, prefix=".metadata-", suffix=".yaml"
         )
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            yaml.safe_dump(metadata, fh, sort_keys=False)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.link(tmp_name, metadata_path)
+    except FileExistsError:
+        logger.debug("YOLO metadata created concurrently: %s", metadata_path)
         return ir_path
+    except OSError as exc:
+        raise RuntimeError(
+            f"Could not write the YOLO metadata DL Streamer 2026.3+ requires "
+            f"at {metadata_path}: {exc}"
+        ) from exc
+    finally:
+        if tmp_name is not None:
+            try:
+                os.unlink(tmp_name)
+            except OSError:  # pragma: no cover - best-effort staging cleanup
+                pass
     logger.info("Wrote DL Streamer YOLO metadata: %s", metadata_path)
     return ir_path
 
