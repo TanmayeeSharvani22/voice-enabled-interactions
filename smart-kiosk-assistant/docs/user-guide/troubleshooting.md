@@ -50,12 +50,12 @@ docker compose logs -f audio-analyzer
 httpx.ConnectError: [Errno 101] Network is unreachable
 ```
 
-raised from `huggingface_hub` during FastAPI startup. The service tried a live
-Hub call (model resolution, or an OpenVINO IR export) and the host has no
+This is raised from `huggingface_hub` during FastAPI startup. The service tried a live
+Hub call (model resolution, or an OpenVINO™ IR export) and the host has no
 direct internet access.
 
 Note that `setup_models.sh` does **not** pre-fetch these models — it only
-handles the OVMS LLM, the queue-analytics YOLO model and Silero VAD. The
+handles the OpenVINO™ Model Server (OVMS) LLM, the queue-analytics YOLO model and Silero VAD. The
 `audio-analyzer`, `text-to-speech` and `rag-service` models are downloaded
 inside their containers on first run, which is why `HF_HUB_OFFLINE=0`
 (online) is the shipped default in `.env.example`. Fix with either:
@@ -107,6 +107,7 @@ inside their containers on first run, which is why `HF_HUB_OFFLINE=0`
   warns and tells you which one actually takes effect — the lower-case one,
   for Python, `curl` and `wget` alike.
 
+  > [!CAUTION]
   > **Deprecated:** `KIOSK_HTTP_PROXY` / `KIOSK_HTTPS_PROXY` (read by the
   > removed `docker-compose.proxy.yml`, together with `make up PROXY=true`)
   > are still applied, with a warning, if the standard names are unset.
@@ -125,7 +126,7 @@ inside their containers on first run, which is why `HF_HUB_OFFLINE=0`
   either switches to offline mode or stops:
 
   | Probe | Caches | Result |
-  |---|---|---|
+  | --- | --- | --- |
   | reachable | — | starts online (unchanged) |
   | unreachable | all 3 hold real weight files | starts with `HF_HUB_OFFLINE=1` automatically |
   | unreachable | cold or incomplete | refuses to start, prints the probe result and the fix |
@@ -161,8 +162,8 @@ inside their containers on first run, which is why `HF_HUB_OFFLINE=0`
   weights are not sufficient for an offline start, because the conversion step
   itself needs the Hub.
 
-  `HF_HUB_OFFLINE=1` is always honoured and never overridden; set
-  `HF_AUTO_OFFLINE=false` to restore the old warn-and-continue behaviour.
+  `HF_HUB_OFFLINE=1` is always honored and never overridden; set
+  `HF_AUTO_OFFLINE=false` to restore the old warn-and-continue behavior.
 
   Intra-cluster traffic always bypasses the proxy via the shared `NO_PROXY`
   anchor in `docker-compose.yml`.
@@ -230,7 +231,7 @@ RAG LLM compile on GPU can also take a few minutes the first time.
 `queue-service` reports `dependency failed to start: container rtsp-streamer
 is unhealthy`, and `rtsp-streamer` logs the same block every ~12 s:
 
-```
+```text
 [rtsp-streamer] Starting mediamtx RTSP server on port 8554 ...
 [rtsp-streamer] mediamtx started (PID=18)
 [rtsp-streamer] Waiting for mediamtx to accept connections on port 8554 ...
@@ -240,7 +241,7 @@ is unhealthy`, and `rtsp-streamer` logs the same block every ~12 s:
 The embedded MediaMTX server exited instead of binding port 8554. `start.sh`
 now prints MediaMTX's own output immediately after that error:
 
-```
+```text
 [rtsp-streamer] ERROR mediamtx (PID=14) exited before accepting connections on port 8554
 [rtsp-streamer] ----- mediamtx log (last 50 lines) -----
 ERR: yaml: mapping values are not allowed in this context
@@ -266,7 +267,7 @@ QUEUE=false` to skip `rtsp-streamer` and `queue-service` entirely.
 A service (most often `audio-analyzer`, but also `rag-service` or
 `identity-service`) restarts forever, and its logs show:
 
-```
+```text
 Configured OpenVINO ASR device 'GPU' is not visible in this runtime.
 OpenVINO available_devices=['CPU']
 ...
@@ -282,7 +283,7 @@ GPU compute runtime is usable.
 stack to CPU in one step — it sets `TARGET_DEVICE` and comments out any
 per-service `*_DEVICE` variable still pinned to `GPU`:
 
-```
+```text
 ✓ TARGET_DEVICE updated  → CPU
 ✓ ASR_DEVICE=GPU commented out (it would have overridden TARGET_DEVICE=CPU)
 ✓ RAG_EMBEDDING_DEVICE=GPU commented out (it would have overridden TARGET_DEVICE=CPU)
@@ -292,7 +293,7 @@ Confirm with `make check-env`, which prints the effective device per service
 and names anything still pinned. On a host with no GPU render node this is a
 hard error, so `make up` cannot proceed into a crash-loop:
 
-```
+```text
 ✗ TARGET_DEVICE=CPU but these override(s) still pin GPU: ASR_DEVICE RAG_EMBEDDING_DEVICE
   A per-service *_DEVICE value takes precedence over TARGET_DEVICE, and this
   host has no GPU render node, so each pinned service will crash-loop with
@@ -305,7 +306,7 @@ mixed setup.
 
 A healthy CPU-only stack instead reports:
 
-```
+```text
 ✓ effective inference devices  asr=CPU rag-embed=CPU rag-rerank=CPU identity=CPU ovms-llm=CPU
 ```
 
@@ -316,6 +317,7 @@ sudo apt-get install -y intel-opencl-icd level-zero
 sudo usermod -aG render $USER   # log out and back in
 ```
 
+> [!NOTE]
 > **Why editing `TARGET_DEVICE` alone is not enough.** A per-service
 > `*_DEVICE` value takes precedence over `TARGET_DEVICE`, and `.env` is not a
 > shell — a variable can only inherit `TARGET_DEVICE` by being **absent or
@@ -331,7 +333,7 @@ sudo usermod -aG render $USER   # log out and back in
 
 ## Selected Device Is Not Used
 
-The device field lives in the per-service pinned config (see
+The device field lives in the per-service pinned configuration (see
 [Configuration](./get-started/configuration.md#inference-device)). If the device
 does not appear in the logs:
 
@@ -339,7 +341,7 @@ does not appear in the logs:
   ASR supports `CPU` for `provider: openai`, and `CPU|GPU|NPU` for
   `provider: openvino` — `NPU` only works with `whisper-tiny`/`whisper-base`,
   see [ASR Support Matrix](./get-started/configuration.md#asr-support-matrix)).
-- For `GPU`: confirm `/dev/dri` exists and the OpenVINO™ GPU
+- For `GPU`: confirm `/dev/dri` exists and the OpenVINO™ Toolkit (OpenVINO™) GPU
   runtime is installed.
 - Restart the affected service after the change:
 
@@ -370,15 +372,15 @@ docker logs audio-analyzer
 ASR provider/device. The ASR selection is read only from
 `configs/audio-analyzer/config.yaml`.
 
-> **Important:**
-> `audio-analyzer` ASR on NPU works only for `whisper-tiny`/`whisper-base`;
-> `whisper-small`+ fails to compile. `make check-env` does not check model
-> name, so a `whisper-small`+ NPU config passes `check-env` but crash-loops
+> [!IMPORTANT]
+> `audio-analyzer` ASR on NPU works only for `whisper-tiny` or `whisper-base`;
+> `whisper-small` (or bigger) fails to compile. `make check-env` does not check model
+> name, so a `whisper-small` (or bigger) NPU configuration passes `check-env` but enters a crash loop
 > at container startup. See
 > [ASR Support Matrix](./get-started/configuration.md#asr-support-matrix).
 
-NPU-capable services (`queue-service`, `identity-service` face/re-id,
-`audio-analyzer` ASR with `whisper-tiny`/`whisper-base`) get the host NPU
+NPU-capable services (`queue-service`, `identity-service` face detection and
+re-identification, `audio-analyzer` ASR with `whisper-tiny` or `whisper-base`) get the host NPU
 device via `ACCEL_MOUNT_PATH` (defaults to `/dev/null` so CPU/GPU-only
 hosts are unaffected). Neither `make up` nor `make check-env`
 auto-detects this — export `ACCEL_MOUNT_PATH` yourself (or set it in
@@ -403,7 +405,7 @@ For direct Compose runs, set the mapping explicitly:
 ACCEL_MOUNT_PATH=/dev/accel/accel0 docker compose up -d queue-service
 ```
 
-### `models.asr.device=NPU` Fails to Compile for `audio-analyzer`
+### `models.asr.device=NPU` fails to compile for `audio-analyzer`
 
 | Provider + Device | Model | Result |
 | --- | --- | --- |
@@ -420,13 +422,13 @@ docker logs audio-analyzer
 curl http://localhost:8010/health
 ```
 
-### `TARGET_DEVICE=NPU` — LLM Turns Fail with "Sorry, I encountered an error"
+### `TARGET_DEVICE=NPU` — LLM turns fail with "Sorry, I encountered an error"
 
-**Symptom.** The stack starts, `ovms-llm` reports `AVAILABLE`, ASR and TTS
+**Symptom:** The stack starts, `ovms-llm` reports `AVAILABLE`, ASR and TTS
 work, but *every* agent turn — both knowledge questions and ordering
 requests — replies `Sorry, I encountered an error. Please try again.`
 
-**Cause.** OVMS serves NPU through a **Stateful** servable (Continuous
+**Cause:** OpenVINO™ Model Server (OVMS) serves NPU through a **Stateful** servable (Continuous
 Batching is CPU/GPU only). The NPU plugin caps prompts at **1024 tokens** by
 default. This agent's prompt is far larger:
 
@@ -440,14 +442,13 @@ Every prompt exceeds the cap, so OVMS rejects the request with
 `HTTP 400 — Input length exceeds the maximum allowed length`. The agent
 endpoint swallows the error and surfaces the canned reply.
 
-> **Warning:**
+> [!WARNING]
 > `MAX_PROMPT_LEN` must be a **top-level** key of `plugin_config`. Written as
 > `{"DEVICE_PROPERTIES":{"NPU":{"MAX_PROMPT_LEN":8192}}}` it is accepted at load
 > time — the servable still reports `AVAILABLE` — but is **silently ignored**,
-> leaving the 1024 default in force. Verified on MTL with Qwen3-4B: the nested
-> form rejects a 1,824-token prompt, the top-level form serves 3,624. This is
-> recorded only so the next person does not lose a day to it — raising the cap
-> makes NPU *work*, not *usable*, for the reasons in the table above.
+> leaving the 1024 default in force. Verified on Intel® Core™ Ultra Series 1 with
+> Qwen3-4B: the nested form rejects a 1,824-token prompt, the top-level form serves
+> 3,624. Raising the cap makes NPU *work*, but it is not *usable*, due to the number of tokens needed; see the table above.
 
 **Recommended fix — use GPU (or CPU).** NPU is **not supported** for the served
 LLM. `setup_models.sh --device NPU` now refuses to run for this reason:
@@ -458,12 +459,12 @@ LLM. `setup_models.sh --device NPU` now refuses to run for this reason:
 docker compose up -d --force-recreate ovms-llm
 ```
 
-The NPU is still used by `queue-service`, `identity-service` and
+The NPU is still used by `queue-service`, `identity-service`, and
 `whisper-tiny`/`whisper-base` ASR — pass `--skip-ovms` to set those up on NPU
 while leaving the LLM on GPU.
 
-**Why NPU is not offered as an option.** Measured on an MTL NPU with Qwen3-4B
-and OVMS 2026.3, using a graph with the prompt cap correctly raised:
+**Why NPU is not offered as an option.** Measured on an Intel® Core™ Ultra Series 1
+NPU with Qwen3-4B and OVMS 2026.3, using a graph with the prompt cap correctly raised:
 
 | Weight format | Output quality | 2,559-token tool-calling turn |
 | --- | --- | ---: |
@@ -479,7 +480,7 @@ correct on NPU is roughly two orders of magnitude too slow for voice.
 Other Stateful-servable constraints that apply if this is ever revisited:
 
 - NPU uses **static shapes**, so the full `MAX_PROMPT_LEN` window is compiled
-  into the model — raising the limit costs compile time, memory and latency
+  into the model — raising the limit costs compile time, memory, and latency
   rather than saving it.
 - Requests are handled **strictly one at a time**; two concurrent kiosk sessions
   serialize.
@@ -489,19 +490,19 @@ Other Stateful-servable constraints that apply if this is ever revisited:
 - A call can outlast `rag-service`'s 90 s generation ceiling
   (`answering.generation_timeout_secs`), which produces the same canned error
   even when OVMS itself would eventually answer.
-- `finish_reason=length` is unsupported, as are beam search, `n > 1` and logprobs.
+- `finish_reason=length` is unsupported, as are beam search, `n > 1`, and logprobs.
 
-> **Important:**
+> [!IMPORTANT]
 > `rag-service` embedding/reranker (`RAG_EMBEDDING_DEVICE` /
 > `RAG_RERANKER_DEVICE`, independent of `TARGET_DEVICE`) **cannot** compile on
 > NPU at all — they are exported with dynamic sequence-length shapes, which the
 > NPU compiler rejects. Leave both on `CPU` or `GPU`.
 
-### `IDENTITY_DEVICE=NPU` — Face/Re-ID Works, Voice Does Not
+### `IDENTITY_DEVICE=NPU` — Face/Re-ID works, Voice does not
 
-Face/re-id models run on NPU. The voice model (ECAPA-TDNN) fails to
-compile (`Upper bounds are not specified for node ... compute_STFT`), so
-voice auth stays disabled (`inference_ready=false`) — this is expected.
+Face detection and re-identification models run on NPU. The voice model (ECAPA-TDNN)
+fails to compile (`Upper bounds are not specified for node ... compute_STFT`), so
+voice authentication stays disabled (`inference_ready=false`) — this is expected.
 See [Identity Service Device](./get-started/configuration.md#identity-service-device-identity_device).
 
 ## Permission Errors on Mounted Folders
@@ -517,7 +518,7 @@ If you still see:
 PermissionError: [Errno 13] Permission denied: '...'
 ```
 
-on a path inside the container, a named volume was likely created
+On a path inside the container, a named volume was likely created
 earlier with the wrong ownership (for example by an older root-only
 run). Reset it:
 
@@ -550,7 +551,7 @@ Microphone access requires HTTPS or localhost.
 
 The UI is not broken and the containers are healthy — the browser is
 withholding the microphone API because the origin is not trusted. Use
-either workaround below.
+either of the workarounds below.
 
 ### Workaround 1 — SSH port forwarding (recommended)
 
@@ -569,14 +570,15 @@ ssh -L 7860:localhost:7860 -L 7861:localhost:7861 <user>@<remote-ip>
 Leave the SSH session open, then browse to `http://127.0.0.1:7860` (or
 `http://127.0.0.1:7861`) on your **local** machine.
 
-> **Note:** Use `127.0.0.1`, not the machine's LAN IP. Only the loopback
+> [!NOTE]
+> Use `127.0.0.1`, not the machine's LAN IP. Only the loopback
 > address qualifies as a secure origin.
 
 ### Workaround 2 — Chrome insecure-origin flag
 
 Tell Chrome to treat the remote origin as secure. This is per-browser and
-must be repeated on every client machine, so prefer the SSH tunnel for
-anything beyond a quick demo:
+must be repeated on every client machine, so the SSH tunnel described above is better for
+anything beyond a quick demonstration:
 
 1. Open `chrome://flags/#unsafely-treat-insecure-origin-as-secure`.
 2. Add the exact origin, including the scheme and port — for example
@@ -584,7 +586,8 @@ anything beyond a quick demo:
    `http://10.223.23.34:7861` if you also need the customer screen.
 3. Set the flag to **Enabled** and relaunch Chrome when prompted.
 
-> **Warning:** This flag disables an origin-security protection for the
+> [!WARNING]
+> This flag disables an origin-security protection for the
 > listed addresses. Use it only on trusted networks, and remove the entry
 > when you are finished.
 
@@ -603,16 +606,16 @@ anything beyond a quick demo:
 
 ## Speaker Labels Are Missing / Diarization Fails to Download
 
-Speaker diarization pulls **three gated** Pyannote models from HuggingFace:
+Speaker diarization pulls **three gated** pyannote models from Hugging Face:
 
 | Model | Gated | Why it is fetched |
 | ----- | ----- | ----------------- |
 | [`pyannote/speaker-diarization-3.1`](https://huggingface.co/pyannote/speaker-diarization-3.1) | Yes | Configured pipeline (`models.diarization.name`) |
 | [`pyannote/segmentation-3.0`](https://huggingface.co/pyannote/segmentation-3.0) | Yes | Segmentation dependency of the pipeline |
 | [`pyannote/speaker-diarization-community-1`](https://huggingface.co/pyannote/speaker-diarization-community-1) | Yes | Pulled by `pyannote.audio` during pipeline setup |
-| `pyannote/wespeaker-voxceleb-resnet34-LM` | No | Embedding dependency — no licence needed |
+| `pyannote/wespeaker-voxceleb-resnet34-LM` | No | Embedding dependency — no license needed |
 
-All three gated repos must be accepted; accepting only the configured
+All three gated repositories must be accepted; accepting only the configured
 `speaker-diarization-3.1` still fails.
 
 Typical `audio-analyzer` log signature:
@@ -630,8 +633,8 @@ To fix:
    docker compose exec audio-analyzer printenv HF_TOKEN
    ```
 
-2. While signed in with the **same** HuggingFace account that owns the
-   token, accept the licence on all three pages:
+2. While signed in with the **same** Hugging Face account that owns the
+   token, accept the license on all three pages:
    - <https://huggingface.co/pyannote/speaker-diarization-community-1>
    - <https://huggingface.co/pyannote/speaker-diarization-3.1>
    - <https://huggingface.co/pyannote/segmentation-3.0>
@@ -684,7 +687,7 @@ missing. Always check the logs rather than the health endpoint.
 
 ## kiosk-core Cannot Reach a Downstream Service
 
-The compose defaults wire `kiosk-core` and `kiosk-ui` to the internal
+The Compose defaults wire `kiosk-core` and `kiosk-ui` to the internal
 service names (`audio-analyzer`, `text-to-speech`, `rag-service`). If
 you override these URLs for a host-run setup, confirm:
 
@@ -692,7 +695,7 @@ you override these URLs for a host-run setup, confirm:
   against the override URL from inside the `kiosk-core` container or
   from the host).
 - For host-run downstreams reached from a container, use
-  `host.docker.internal` (see the alternative compose snippets in
+  `host.docker.internal` (see the alternative Compose snippets in
   [Run With Docker Compose](./get-started/run-container.md)).
 
 ## See Also

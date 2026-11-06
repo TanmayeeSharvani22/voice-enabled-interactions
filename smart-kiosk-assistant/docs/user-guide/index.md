@@ -38,6 +38,7 @@ models. `kiosk-core` and `kiosk-ui` are I/O-only.
 - [Get Started](./get-started.md)
 - [How It Works](./how-it-works.md)
 - [Measuring Latency](./measuring-latency.md)
+- [QSR MCP Surface](./qsr-mcp.md)
 - [Release Notes](./release-notes.md)
 
 <!--hide_directive
@@ -47,6 +48,7 @@ models. `kiosk-core` and `kiosk-ui` are I/O-only.
 ./get-started.md
 ./how-it-works.md
 ./measuring-latency.md
+QSR MCP Surface <./qsr-mcp.md>
 ./api-reference.md
 ./troubleshooting.md
 Release Notes <./release-notes.md>

@@ -1,7 +1,7 @@
 # Run With Docker Compose
 
 This guide covers building the images from source and running the full
-stack with `docker compose`. For source code changes to any service, see
+stack with Docker Compose. For source code changes to any service, see
 [Build from Source](./build-from-source.md).
 
 Microphone audio is captured by the browser and uploaded to `kiosk-core`
@@ -45,7 +45,7 @@ example; actual host path may vary. Compose maps it into the container at
 `/dev/accel/accel0`.
 
 | Container | Port | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | `ovms-llm` | 8000 | Serves Qwen3-4B via OpenAI-compatible API |
 | `metrics-collector` | 9000 | Hardware utilization metrics |
 | `audio-analyzer` | 8010 | Whisper ASR + speaker diarization |
@@ -57,7 +57,7 @@ example; actual host path may vary. Compose maps it into the container at
 
 Both `kiosk-ui` and `kiosk-ui-customer` are the exact same image/build;
 only the `KIOSK_UI_MODE` environment variable and published port differ
-(see [Configuration](./configuration.md#kiosk_ui_mode)). There is no
+(see [Configuration](./configuration.md#kiosk-ui-runtime-mode-kiosk_ui_mode)). There is no
 separate Dockerfile or build context for the customer screen.
 
 Containers run as non-root; every image is built with UID/GID
@@ -83,6 +83,8 @@ view with the queue-aware menu, live cart, and a full-width **Ask**
 button. Intended for the physical kiosk touchscreen (tested at 1920×1080
 landscape) while the operator screen runs on a separate monitor.
 
+> [!NOTE]
+>
 > **Running on a remote or headless host?** Browsers only grant microphone
 > access on a secure origin, so opening `http://<remote-ip>:7860` directly
 > loads the page but fails with *"Microphone access requires HTTPS or

@@ -1,6 +1,8 @@
 # Release Notes: Smart Kiosk Assistant
 
-## 2026.2.0
+## Version 2026.2.0
+
+**Release Date**: September 10, 2026
 
 This release delivers a unified Smart Kiosk Assistant platform with dual React-based user interfaces, OpenVINO-powered AI inference, agentic MCP tool calling, queue-aware ordering, enhanced voice interaction, optional multimodal identity, configurable inference devices, and streamlined deployment.
 
@@ -13,9 +15,9 @@ This release delivers a unified Smart Kiosk Assistant platform with dual React-b
 
 - **Agentic Ordering with MCP:** Integrated an MCP tool server into `kiosk-core` to manage catalog browsing, cart operations, order confirmation, and upsell recommendations. Guardrails handle ambiguous item references and invalid quantities.
 
-- **AI Inference with OVMS:** Migrated the Qwen3-4B ordering model from in-process OpenVINO inference to OpenVINO Model Server (OVMS), providing a dedicated OpenAI-compatible endpoint for agentic tool calling.
+- **AI Inference with OVMS:** Migrated the Qwen3-4B ordering model from in-process OpenVINO™ inference to OpenVINO™ Model Server (OVMS), providing a dedicated OpenAI-compatible endpoint for agentic tool calling.
 
-- **Queue-Aware Ordering:** Added YOLO-based person counting and RTSP streaming with OpenVINO to monitor queue length, provide a live MJPEG overlay, and dynamically adapt menu recommendations during peak periods.
+- **Queue-Aware Ordering:** Added YOLO-based person counting and RTSP streaming with OpenVINO™ to monitor queue length, provide a live MJPEG overlay, and dynamically adapt menu recommendations during peak periods.
 
 - **Contextual Upselling:** Added a rule-based upsell engine that generates relevant add-on recommendations and surfaces them in both the customer cart and voice responses.
 
@@ -45,7 +47,6 @@ This release delivers a unified Smart Kiosk Assistant platform with dual React-b
 
 - **Sample RTSP Video Provisioning:** Added configurable tooling to download and provision sample video clips required by the queue analytics pipeline.
 
-
 ## 2026.1.0
 
 The initial release of Smart Kiosk Assistant marks the launch of a voice-enabled
@@ -73,4 +74,3 @@ environments. The application has the following features:
   deploy, adapt, and scale across enterprise environments.
 - This launch establishes Smart Kiosk Assistant as a strong foundation for
   immersive, intelligent, and voice-first digital engagement experiences.
-

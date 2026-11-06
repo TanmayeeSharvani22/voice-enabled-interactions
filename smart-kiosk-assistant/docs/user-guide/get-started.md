@@ -6,11 +6,9 @@ ordering session end to end.
 Confirm your machine meets the
 [System Requirements](./get-started/system-requirements.md) before starting.
 
-## Prerequisites
+## Application Overview
 
-### Application Overview
-
-The Smart Kiosk Assistant is a voice-driven quick-service-restaurant (QSR)
+Smart Kiosk Assistant is a voice-driven quick-service-restaurant (QSR)
 ordering kiosk. The browser captures microphone audio and uploads it to
 `audio-analyzer` (Whisper ASR + speaker diarization); `rag-service` runs the
 RAG pipeline and ordering agent on a Qwen3-4B model served by `ovms-llm`;
@@ -19,6 +17,8 @@ session and product ordering, `kiosk-ui` is the React front end, and
 `rtsp-streamer` + `queue-service` provide person-counting queue analytics.
 `metrics-collector` reports hardware utilization, and the optional
 `identity-service` adds face + voice authentication.
+
+## Prerequisites
 
 - Ubuntu 22.04 or newer (Linux, Desktop edition — a browser with microphone
   access is required for voice ordering)
@@ -29,15 +29,16 @@ session and product ordering, `kiosk-ui` is the React front end, and
   [Device support](#device-support-cpu-gpu-npu) before choosing NPU)
 - Intel GPU drivers (recommended) — see the
   [Intel GPU driver guide](https://dgpu-docs.intel.com)
-- A [HuggingFace account and access token](https://huggingface.co/settings/tokens),
-  with the three gated Pyannote licences accepted — required for speaker
+- A [Hugging Face account and access token](https://huggingface.co/settings/tokens),
+  with the three gated Pyannote licenses accepted — required for speaker
   diarization:
   [`speaker-diarization-community-1`](https://huggingface.co/pyannote/speaker-diarization-community-1),
   [`speaker-diarization-3.1`](https://huggingface.co/pyannote/speaker-diarization-3.1),
   and [`segmentation-3.0`](https://huggingface.co/pyannote/segmentation-3.0)
 - At least 30 GB free disk space for models and Docker images
 
-> **Note:** First-time setup downloads the OVMS LLM model (~4 GB) plus the
+> [!NOTE]
+> First-time setup downloads the OpenVINO™ Model Server (OVMS) LLM model (~4 GB) plus the
 > in-container ASR, TTS, embedding, and reranker models. Allow extra time on
 > the first run depending on your connection.
 
@@ -49,7 +50,7 @@ deployment that either crash-loops or silently runs on CPU.** Read this before
 setting `TARGET_DEVICE` in [Step 3](#step-3-create-env-and-set-required-variables).
 
 | Component | CPU | GPU | NPU |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `ovms-llm` (served LLM) | ✅ | ✅ | ❌ **Not supported** |
 | `audio-analyzer` ASR | ✅ | ✅ | ⚠️ `whisper-tiny` / `whisper-base` only |
 | `queue-service`, `identity-service` | ✅ | ✅ | ✅ |
@@ -75,10 +76,11 @@ setting `TARGET_DEVICE` in [Step 3](#step-3-create-env-and-set-required-variable
 
 See [Troubleshooting](troubleshooting.md) for the full diagnostics and fixes.
 
-## Step 1: Install Docker and Intel GPU Drivers
+## Step 1: Install Docker and Intel GPU drivers
 
-Skip if Docker is already installed (`docker --version` and
-`docker compose version` both succeed).
+Skip this step if Docker is already installed (`docker --version` and
+`docker compose version` both succeed). Otherwise, install Docker Engine and
+Docker Compose v2:
 
 ```bash
 # Docker Engine + Compose v2
@@ -96,7 +98,7 @@ sudo apt-get install -y docker-ce docker-ce-cli containerd.io \
 sudo usermod -aG docker $USER && newgrp docker
 ```
 
-For Intel iGPU acceleration (recommended) install the GPU compute runtime:
+For Intel iGPU acceleration (recommended), install the GPU compute runtime:
 
 ```bash
 sudo apt-get install -y intel-opencl-icd intel-level-zero-gpu level-zero
@@ -122,8 +124,8 @@ Create your environment file from the template:
 make init-env        # copies .env.example → .env
 ```
 
-Open `.env` and set your HuggingFace token (free account at
-https://huggingface.co/settings/tokens):
+Open `.env` and set your Hugging Face token (free account at
+<https://huggingface.co/settings/tokens>):
 
 ```bash
 # .env
@@ -131,18 +133,19 @@ HF_TOKEN=hf_your_token_here
 ```
 
 Speaker diarization uses three **gated** Pyannote models. While signed in to
-HuggingFace with the same account that owns the token, accept the licence on
+Hugging Face with the same account that owns the token, accept the license on
 **all three** model pages — accepting only some of them is not enough, and the
 `audio-analyzer` container will fail to download the pipeline:
 
-- https://huggingface.co/pyannote/speaker-diarization-community-1
-- https://huggingface.co/pyannote/speaker-diarization-3.1
-- https://huggingface.co/pyannote/segmentation-3.0
+- <https://huggingface.co/pyannote/speaker-diarization-community-1>
+- <https://huggingface.co/pyannote/speaker-diarization-3.1>
+- <https://huggingface.co/pyannote/segmentation-3.0>
 
-> **Note:** If you do not want to accept these licences, set
-> `KIOSK_CORE_DIARIZATION_ENABLED=false` in `.env`. The stack starts normally
-> and speech-to-text keeps working — only per-speaker attribution is
-> unavailable.
+> [!NOTE]
+> If you do not want to accept these licenses, set
+  `KIOSK_CORE_DIARIZATION_ENABLED=false` in `.env`. The stack starts normally
+  and speech-to-text keeps working — only per-speaker attribution is
+  unavailable.
 
 For Intel GPU inference (the default `TARGET_DEVICE=GPU`), set `RENDER_GID`
 so containers can access `/dev/dri`:
@@ -171,8 +174,9 @@ before starting the stack:
 ./setup_models.sh --int4
 ```
 
-The script downloads the pre-converted OpenVINO model into `./models/`
-and updates `OVMS_MODEL_NAME`, `TARGET_DEVICE`, and `RENDER_GID` in `.env`.
+The script downloads the model, pre-converted for the OpenVINO™ Toolkit (OpenVINO™),
+into `./models/` and updates `OVMS_MODEL_NAME`, `TARGET_DEVICE`, and `RENDER_GID`
+in `.env`.
 The download happens once — subsequent starts reuse the cached model.
 
 ## Step 5: Download Sample Videos for Queue Analytics
@@ -201,7 +205,7 @@ CAMERA_DEVICE=/dev/video0
 the sample clips continuously. `live` mode uses the configured `CAMERA_DEVICE`
 and keeps the RTSP endpoint unchanged at `rtsp://rtsp-streamer:8554/queue`.
 
-### Live Camera Streaming
+### Live camera streaming
 
 To stream a webcam instead of the bundled sample clips, set the RTSP source mode
 to `live` in `.env` and choose the device node that matches your camera:
@@ -233,7 +237,7 @@ docker compose up -d rtsp-streamer
 
 The RTSP endpoint stays the same in both modes:
 
-```bash
+```text
 rtsp://rtsp-streamer:8554/queue
 ```
 
@@ -257,13 +261,15 @@ service images from source instead, set `REGISTRY=false` (`make build
 REGISTRY=false`); `ovms-llm` always uses a pre-built upstream image and is pulled
 automatically. A from-source build takes 10–20 minutes the first time.
 
+> [!NOTE]
+>
 > **`REGISTRY` and `REGISTRY_REPO` are two different settings.** They are easy
 > to confuse because of the similar names:
 >
 > | Variable | Shipped value | Read by | Meaning |
-> |---|---|---|---|
+> | --- | --- | --- | --- |
 > | `REGISTRY` | `true` | the `Makefile` only | Build mode: `true` = pull released images, `false` = build from source |
-> | `REGISTRY_REPO` | `intel` | `docker-compose.yml` | Image **name prefix**, e.g. `intel/kiosk-core:latest` |
+> | `REGISTRY_REPO` | `intel` | `docker-compose.yml` | Image **name prefix**, e.g., `intel/kiosk-core:latest` |
 >
 > Every `image:` entry in `docker-compose.yml` resolves through
 > `${REGISTRY_REPO:-intel}`, never through `REGISTRY`. Keep `REGISTRY_REPO=intel`
@@ -314,6 +320,7 @@ make show-config                # prints REGISTRY, the compose image prefix, and
 docker inspect kiosk-core --format '{{.Config.Image}} (image ID: {{.Image}})'
 ```
 
+> [!IMPORTANT]
 > `RELEASE_TAG` in `.env` must match the Makefile default (`RELEASE_TAG ?= latest`)
 > unless you deliberately pin a different one. `METRICS_COLLECTOR_TAG` is
 > independent and is versioned separately.
@@ -322,7 +329,7 @@ The default stack starts ten containers (`QUEUE=true` by default; identity is
 off):
 
 | Container | Port | Role |
-|---|---|---|
+| --- | --- | --- |
 | `ovms-llm` | 8000 (REST), 9001 (gRPC) | Serves Qwen3-4B via OpenAI-compatible API |
 | `metrics-collector` | 9000 | Hardware utilization metrics |
 | `audio-analyzer` | 8010 | Whisper ASR + speaker diarization |
@@ -372,7 +379,7 @@ returns the active model name (`OpenVINO/Qwen3-4B-int8-ov`).
 
 Open a browser on the same machine:
 
-```
+```text
 http://127.0.0.1:7860
 ```
 
@@ -385,7 +392,7 @@ http://127.0.0.1:7860
    - *"I'd like to order a Classic Chicken Burger"*
    - *"Confirm my order"*
 3. Watch the **🍔 QSR** tab in the right panel — the **Menu** sub-tab
-   shows the full catalogue; the **Cart** sub-tab shows your live order
+   shows the full catalog; the **Cart** sub-tab shows your live order
    and the confirmed receipt after you say *"Confirm"*.
 
 ## Stop the Services
@@ -398,11 +405,11 @@ make clean           # stop and remove named volumes for a clean restart
 ## Quick Start Reference
 
 | Task | Command | Description |
-|---|---|---|
-| Create env file | `make init-env` | Copy `.env.example` → `.env` |
+| --- | --- | --- |
+| Create environment file | `make init-env` | Copy `.env.example` → `.env` |
 | Download LLM model | `make setup-models` | Fetch the OVMS Qwen3-4B model |
 | Download sample videos | `make download-sample-video` | Fetch queue-service RTSP clips |
-| Build images | `make build` | Build locally (`REGISTRY=true` to pull) |
+| Build images | `make build` | Build locally (shipped .env has `REGISTRY=true`) |
 | Start services | `make up` | Start the full stack |
 | Verify health | `make test` | Check all service endpoints |
 | View logs | `make logs` | Tail logs for all services |
