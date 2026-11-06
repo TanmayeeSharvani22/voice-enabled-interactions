@@ -11,19 +11,19 @@ and mounts into the containers. The most common changes are the
 ## Model Selection
 
 Each model-hosting service reads the model identifier from the same
-pinned config file used for device selection:
+pinned configuration file used for device selection:
 
 | Service | File | Model fields |
 | --- | --- | --- |
-| `audio-analyzer` | [`configs/audio-analyzer/config.yaml`](https://github.com/intel-retail/voice-enabled-interactions/blob/main/smart-kiosk-assistant/configs/audio-analyzer/config.yaml) | `models.asr.name` (e.g. `whisper-tiny`, `whisper-base`); `sentiment.model` (optional) |
-| `text-to-speech` | [`configs/text-to-speech/config.yaml`](https://github.com/intel-retail/voice-enabled-interactions/blob/main/smart-kiosk-assistant/configs/text-to-speech/config.yaml) | `models.tts.name` (e.g. `microsoft/speecht5_tts`, Qwen-TTS variant); `model_variant` |
+| `audio-analyzer` | [`configs/audio-analyzer/config.yaml`](https://github.com/intel-retail/voice-enabled-interactions/blob/main/smart-kiosk-assistant/configs/audio-analyzer/config.yaml) | `models.asr.name` (e.g., `whisper-tiny`, `whisper-base`); `sentiment.model` (optional) |
+| `text-to-speech` | [`configs/text-to-speech/config.yaml`](https://github.com/intel-retail/voice-enabled-interactions/blob/main/smart-kiosk-assistant/configs/text-to-speech/config.yaml) | `models.tts.name` (e.g., `microsoft/speecht5_tts`, Qwen-TTS variant); `model_variant` |
 | `rag-service` | [`rag-service/config.yaml`](https://github.com/intel-retail/voice-enabled-interactions/blob/main/smart-kiosk-assistant/rag-service/config.yaml) | `models.llm.hf_id`, `models.embedding.hf_id`, `retrieval.reranker.hf_id`; per-model `weight_format` (`int4`, `int8`, `fp16`) |
 
 Use Hugging Face IDs where the field name is `hf_id`. Models are
 downloaded and exported on first start into the per-service `models/`
 directory; subsequent starts reuse the cache.
 
-### Supported / validated models
+### Supported and validated models
 
 The kiosk ships with the following defaults. These are the models the
 stack has been validated with — they are the recommended starting point.
@@ -38,7 +38,8 @@ The **Devices** column lists the supported inference devices for each:
 | `rag-service` embedding | `models.embedding.hf_id` | `BAAI/bge-large-en-v1.5` | `BAAI/bge-base-en-v1.5`, `BAAI/bge-small-en-v1.5` | `CPU`, `GPU` (`CPU` is usually fast enough) |
 | `rag-service` reranker | `retrieval.reranker.hf_id` | `BAAI/bge-reranker-base` | `BAAI/bge-reranker-large` | `CPU`, `GPU` (optional) |
 
-> **Important:**
+> [!IMPORTANT]
+>
 > **Changing models is at your own discretion.** The defaults above are
 > the only combinations validated with this stack. Configuring models,
 > variants, devices, or precisions other than the defaults may negatively
@@ -52,8 +53,8 @@ The **Devices** column lists the supported inference devices for each:
 > - Some models do not function properly at aggressive quantization. If a
 >   model produces garbled, empty, or low-quality output at `int4`, switch
 >   that model's `weight_format`/`dtype` to `int8` or `fp16`.
-> - A model must be exportable to OpenVINO™ IR for the OpenVINO™ backend; not
->   every Hugging Face model is supported.
+> - A model must be exportable to the OpenVINO™ Toolkit (OpenVINO™) Intermediate
+>   Representation (IR) format for the OpenVINO™ backend; not every Hugging Face model is supported.
 > - Larger models increase first-run download/export time, memory use, and
 >   per-request latency, and may not fit on the selected device.
 > - After any change, restart the affected service and verify it loads and
@@ -61,7 +62,7 @@ The **Devices** column lists the supported inference devices for each:
 
 ## Inference Device
 
-Each model-hosting service reads its device from a pinned config file:
+Each model-hosting service reads its device from a pinned configuration file:
 
 | Service | File | Fields |
 | --- | --- | --- |
@@ -70,13 +71,13 @@ Each model-hosting service reads its device from a pinned config file:
 | `rag-service` | [`rag-service/config.yaml`](https://github.com/intel-retail/voice-enabled-interactions/blob/main/smart-kiosk-assistant/rag-service/config.yaml) | `models.llm.device`, `models.embedding.device`, `retrieval.reranker.device` |
 
 The supported devices for each model are listed in the
-[Supported / validated models](#supported--validated-models) table above.
+[Supported / validated models](#supported-and-validated-models) table above.
 
 Use uppercase device names (`CPU`, `GPU`, and — for `audio-analyzer` ASR and
 `queue-service` only — `NPU`). `rag-service` expects them as quoted strings;
-`audio-analyzer` and `text-to-speech` unquoted.
+for `audio-analyzer` and `text-to-speech` — unquoted.
 
-> **Important:**
+> [!IMPORTANT]
 > **`text-to-speech` does not support `NPU`.** `models.tts.device` only
 > accepts `CPU`/`GPU` (see `configs/text-to-speech/config.yaml`); there is no
 > NPU device mapping for this service in `docker-compose.yml`. Do not set
@@ -92,6 +93,7 @@ docker compose logs <service-name> | grep -i -E "device|compiling|GPU|CPU"
 
 OpenVINO™ prints a `Compiling model on <DEVICE>` line on first load.
 
+> [!NOTE]
 > GPU execution is delegated to the OpenVINO™ backend used by each
 > service. Whether a given model actually runs on GPU and how it
 > performs depends on the OpenVINO™ version and operator coverage for
@@ -114,7 +116,7 @@ unaffected.
 
 ### ASR on NPU: `whisper-tiny`/`whisper-base` only
 
-> **Important:**
+> [!IMPORTANT]
 > NPU works for ASR **only** with `models.asr.name: whisper-tiny` or
 > `whisper-base`. `whisper-small`/`medium`/`large` fail to compile on NPU
 > with `Check '!self_attn_nodes.empty()' failed`.
@@ -123,8 +125,8 @@ unaffected.
 > [OpenVINO™ NPU docs](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/npu-device.html)).
 > Whisper's IR has dynamic shapes, so OpenVINO™ GenAI's NPUW plugin
 > pattern-matches attention blocks to make it static — a heuristic that
-> succeeds for `tiny`/`base` and fails for larger models. Not fixable via
-> config; re-test if you upgrade OpenVINO™/GenAI or the audio-analyzer image.
+> succeeds for `tiny`/`base` and fails for larger models. This is not fixable via
+> configuration; retest if you upgrade OpenVINO™/GenAI or the `audio-analyzer` image.
 
 ```yaml
 models:
@@ -135,7 +137,7 @@ models:
     weight_format: null
 ```
 
-### Other ASR Configurations
+### Other ASR configurations
 
 ```yaml
 # OpenAI + CPU
@@ -148,7 +150,7 @@ models: { asr: { provider: openvino, device: CPU } }
 
 `openai` supports `CPU` only — `openai + GPU` and `openai + NPU` are not supported.
 
-### ASR Support Matrix
+### ASR support matrix
 
 | Provider | CPU | GPU | NPU |
 | --- | --- | --- | --- |
@@ -160,9 +162,9 @@ If `GPU` is configured and unavailable on the host, `make check-env` fails befor
 
 ## Audio Analyzer Diarization Device (`config.yaml`)
 
-> **Important:**
-> **Diarization requires three gated HuggingFace models.** Before enabling it,
-> set `HF_TOKEN` in `.env` and accept the licence on **all three** pages with
+> [!IMPORTANT]
+> **Diarization requires three gated Hugging Face models.** Before enabling it,
+> set `HF_TOKEN` in `.env` and accept the license on **all three** pages with
 > the same account that owns the token:
 > [`pyannote/speaker-diarization-community-1`](https://huggingface.co/pyannote/speaker-diarization-community-1),
 > [`pyannote/speaker-diarization-3.1`](https://huggingface.co/pyannote/speaker-diarization-3.1),
@@ -171,21 +173,21 @@ If `GPU` is configured and unavailable on the host, `make check-env` fails befor
 > `speaker-diarization-community-1` in addition to the configured
 > `speaker-diarization-3.1`, so accepting only the configured model still
 > fails with a `401`. (`pyannote/wespeaker-voxceleb-resnet34-LM` is also
-> downloaded but is **not** gated — no licence acceptance needed.) Set
+> downloaded but is **not** gated — no license acceptance needed.) Set
 > `KIOSK_CORE_DIARIZATION_ENABLED=false` to run without diarization.
 
 Diarization (`models.diarization.device`) is a **separate component from ASR**
 (see [ASR Support Matrix](#asr-support-matrix) above) with its own,
-more limited device support. Do not assume ASR's `CPU`/`GPU`/`NPU` support
-applies to diarization — it does not.
+more limited device support. ASR's `CPU`/`GPU`/`NPU` support
+does not apply to diarization.
 
-> **Important:**
+> [!IMPORTANT]
 > **In the currently released Kiosk image, diarization only supports `CPU`.**
 > The diarizer (`pyannote/speaker-diarization-3.1`, a PyTorch/SpeechBrain
 > model) is loaded with `torch.device(<configured value>)`. PyTorch has no
 > `"gpu"` device string (Intel GPU support in PyTorch requires `"xpu"`, which
 > this component does not use) and no `"npu"` device string at all. Setting
-> `device: GPU` or `device: NPU` is **accepted by the config schema** but
+> `device: GPU` or `device: NPU` is **accepted by the configuration schema** but
 > fails at diarizer-load time with an error like:
 >
 > ```text
@@ -208,7 +210,7 @@ upstream code until a Kiosk image that includes it is released.
 
 ## Queue Service Device (`QUEUE_DEVICE`)
 
-`queue-service` runs the YOLO26 person detector through a DLStreamer
+`queue-service` runs the YOLO26 person detector through a Deep Learning Streamer
 (`gvainference`) pipeline. The inference device is controlled by
 `model.device` in `queue-service/conf/queue-config.yaml`, and can be
 overridden without editing that file via `QUEUE_DEVICE` in `.env`
@@ -230,6 +232,7 @@ docker logs queue-service 2>&1 | grep "gvainference model"
 # Expected: ... gvainference model=... device=NPU ...  (or CPU/GPU, matching QUEUE_DEVICE)
 ```
 
+> [!NOTE]
 > Editing `queue-config.yaml`'s `model.device` directly also works and takes
 > precedence in the same way as any other YAML default — `QUEUE_DEVICE` only
 > needs to be set when you want to override it without touching the file.
@@ -244,7 +247,7 @@ models**, loaded via `openvino.Core().compile_model(model, device)`, and
 `docker-compose.yml` to the OpenVINO™ compile call. The device-selection
 code itself has no bug and no model-format limitation.
 
-> **Note:**
+> [!NOTE]
 > **Face detection/re-identification support `CPU`, `GPU`, and `NPU`.**
 > The `identity-service` container has NPU device passthrough via the same
 > `ACCEL_MOUNT_PATH`/`/dev/accel` mechanism used by `audio-analyzer` and
@@ -280,6 +283,7 @@ Per-service variables (`ASR_DEVICE`, `RAG_EMBEDDING_DEVICE`,
 service and **takes precedence over `TARGET_DEVICE`**. `TTS_DEVICE`,
 `DIARIZATION_DEVICE` and `QUEUE_DEVICE` remain `CPU` by design.
 
+> [!NOTE]
 > **Running without a usable GPU:** run `make setup-models TARGET_DEVICE=CPU`.
 > That switches the whole stack to CPU in one step: it sets `TARGET_DEVICE`
 > and comments out any per-service `*_DEVICE` variable still pinned to `GPU`
@@ -289,7 +293,7 @@ service and **takes precedence over `TARGET_DEVICE`**. `TTS_DEVICE`,
 > by hand is **not** sufficient on its own, and every pinned service
 > crash-loops at startup with `[GPU] Context was not initialized for 0 device`.
 >
-> A deliberate non-GPU override (e.g. `ASR_DEVICE=NPU`) is left untouched.
+> A deliberate non-GPU override (e.g., `ASR_DEVICE=NPU`) is left untouched.
 > `make check-env` lists the effective device per service; on a host with no
 > GPU render node it **fails** on any leftover `GPU` pin rather than letting
 > `make up` proceed into a crash-loop.
@@ -297,7 +301,7 @@ service and **takes precedence over `TARGET_DEVICE`**. `TTS_DEVICE`,
 - **Supported:** `TARGET_DEVICE=CPU`, `TARGET_DEVICE=GPU`.
 - **Not supported:** `TARGET_DEVICE=NPU` — see below.
 
-> **Important:**
+> [!IMPORTANT]
 > **`TARGET_DEVICE=NPU` is not supported for `ovms-llm`.**
 > Device passthrough and model compilation both work — the `ovms-llm`
 > container has NPU passthrough via the same `ACCEL_MOUNT_PATH`/`/dev/accel`
@@ -310,7 +314,7 @@ service and **takes precedence over `TARGET_DEVICE`**. `TTS_DEVICE`,
 > - **INT4** (`OpenVINO/Qwen3-4B-int4-ov`) is fast (~8 s) but numerically
 >   broken on NPU — it emits repeated tokens instead of text and never forms a
 >   tool call.
-> - The NPU-optimised channel-wise tier (`int4-cw`) is not published for
+> - The NPU-optimized channel-wise tier (`int4-cw`) is not published for
 >   Qwen3-4B, only Qwen3-8B.
 >
 > Out of the box you will instead hit `HTTP 400 — Input length exceeds the
@@ -322,7 +326,7 @@ service and **takes precedence over `TARGET_DEVICE`**. `TTS_DEVICE`,
 >
 > **Use `TARGET_DEVICE=GPU`** (recommended) **or `TARGET_DEVICE=CPU`.**
 > This restriction applies only to the OVMS-served LLM — `queue-service`,
-> `identity-service` and `whisper-tiny`/`whisper-base` ASR still use the NPU.
+> `identity-service`, and `whisper-tiny`/`whisper-base` ASR still use the NPU.
 
 ## RAG Service Embedding/Reranker Device (`RAG_EMBEDDING_DEVICE`, `RAG_RERANKER_DEVICE`)
 
@@ -342,7 +346,7 @@ pinned independently via `RAG_EMBEDDING_DEVICE` / `RAG_RERANKER_DEVICE` in
   `CPU` or `GPU`. Default: `GPU`.
 - **Currently unsupported:** `NPU`.
 
-> **Important:**
+> [!IMPORTANT]
 > **`NPU` is not supported for the embedding/reranker models.**
 > `optimum-intel`'s default export produces OpenVINO™ IR with dynamic
 > (unbounded) sequence-length and batch shapes — required because queries
@@ -362,13 +366,13 @@ pinned independently via `RAG_EMBEDDING_DEVICE` / `RAG_RERANKER_DEVICE` in
 
 ## Device-Combination Benchmarking (`PROFILE`)
 
-To compare inference devices (ASR on CPU/GPU/NPU × TTS on CPU/GPU/NPU, with
+To compare inference devices (ASR on CPU/GPU/NPU against TTS on CPU/GPU/NPU, with
 the LLM pinned to GPU) you do **not** need to edit any mounted `config.yaml`.
-The variables below override the audio-analyzer and text-to-speech configs
+The variables below override the audio-analyzer and text-to-speech configurations
 from the environment. Every default reproduces the checked-in YAML exactly,
 so an ordinary `make up` is unaffected.
 
-| Variable | Default (= shipped config) | Purpose |
+| Variable | Default (= shipped configuration) | Purpose |
 | --- | --- | --- |
 | `ASR_MODEL` | `distil-whisper/distil-small.en` | ASR checkpoint |
 | `ASR_DEVICE` | `${TARGET_DEVICE}` (`GPU`) | ASR final-commit device |
@@ -383,7 +387,7 @@ so an ordinary `make up` is unaffected.
 | `KIOSK_RESULTS_HOST_DIR` | `./results` | Results bind mount (set by `PROFILE`) |
 | `KIOSK_METRICS_HOST_DIR` | `./metrics` | Metrics bind mount (set by `PROFILE`) |
 
-The supported workflow is a **profile** — an env file under
+The supported workflow is a **profile** — an environment file under
 `configs/benchmark-profiles/` holding one device combination:
 
 ```bash
@@ -394,12 +398,13 @@ make benchmark-matrix                           # every profile + comparison
 ```
 
 Each profile writes to its own `results/<profile>/` and `metrics/<profile>/`
-directory. Never point two profiles at one directory: the metrics consolidator
+directory. **Never point two profiles at one directory**: the metrics consolidator
 matches extractors by filename *substring* and would silently average unrelated
 runs into a single meaningless row.
 
-> **`make validate-profile` is mandatory and runs automatically before
-> `make benchmark`.** Besides rejecting impossible combinations, it catches the
+> [!IMPORTANT]
+> **`make validate-profile` is mandatory and runs automatically before `make benchmark`.**
+> Besides rejecting impossible combinations, it catches the
 > dangerous failure mode: `docker-compose.yml` mounts
 > `${ACCEL_MOUNT_PATH:-/dev/null}`, so with the portable default an "NPU"
 > profile **silently runs on CPU**, succeeds, and files plausible numbers under
@@ -407,7 +412,7 @@ runs into a single meaningless row.
 > or missing, and verifies the host actually exposes the requested GPU/NPU.
 
 Because the production defaults cannot span all three devices
-(`distil-small.en` corrupts on NPU, `whisper-small`+ fails to compile on NPU,
+(`distil-small.en` corrupts on NPU, `whisper-small`, or bigger, fails to compile on NPU,
 and Kokoro is CPU-only), the matrix pins `whisper-base` and
 `microsoft/speecht5_tts` on the `openvino` runtime so that **device is the only
 variable**. `baseline-production` measures the shipped configuration and should
@@ -417,7 +422,7 @@ See `configs/benchmark-profiles/README.md` for the full compatibility matrix.
 
 ## Environment Variables
 
-kiosk-core has no config file. All settings are controlled through environment variables.
+`kiosk-core` has no configuration file. All settings are controlled through environment variables.
 
 ### kiosk-core API (`main:app`)
 
@@ -442,21 +447,21 @@ kiosk-core has no config file. All settings are controlled through environment v
 ### Kiosk UI runtime mode {#kiosk_ui_mode}
 
 The React kiosk UI (`kiosk-ui/`) ships as a single image that can serve
-either of two screens, selected at container start — no rebuild.
+either of two screens, selected at container start, and this requires no rebuild.
 `KIOSK_UI_MODE` is the only variable the UI container reads; the browser
 reaches `kiosk-core` and the other services through the nginx reverse
 proxy baked into the image:
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `KIOSK_UI_MODE` | `operator` | `operator` — chat transcript + performance dashboard (existing behaviour), served on port 7860. `customer` — single-view kiosk screen with a queue-aware menu, live cart, and a voice-only "Ask" button, intended for the physical kiosk touchscreen. |
+| `KIOSK_UI_MODE` | `operator` | `operator` — chat transcript + performance dashboard (existing behavior), served on port 7860. `customer` — single-view kiosk screen with a queue-aware menu, live cart, and a voice-only "Ask" button, intended for the physical kiosk touchscreen. |
 
 The value is written to `/usr/share/nginx/html/config.js` by
 `docker-entrypoint.sh` (installed as an nginx `docker-entrypoint.d`
 script) and read by the SPA before the React bundle loads. In
 `docker-compose.yml` the two screens are separate containers
 (`kiosk-ui` and `kiosk-ui-customer`) built from the *same* image/context,
-published on different host ports (`7860` and `7861` respectively) so
+published on different host ports (`7860` and `7861`, respectively) so
 they can be shown on two separate monitors during a demo.
 
 ## Compose Defaults
@@ -484,7 +489,7 @@ Step-by-step workflow to run this stack with Intel NPU acceleration where suppor
 | Component | NPU |
 | --- | --- |
 | Queue Service (`QUEUE_DEVICE`) | ✅ Yes |
-| Identity Service face/re-id (`IDENTITY_DEVICE`) | ✅ Yes |
+| Identity Service face detection/re-identification (`IDENTITY_DEVICE`) | ✅ Yes |
 | Identity Service voice/ECAPA-TDNN (`IDENTITY_DEVICE`) | ❌ No — dynamic shape rejected by NPU compiler |
 | Audio Analyzer ASR (`models.asr.device`) | ⚠️ `whisper-tiny`/`whisper-base` only — see [ASR Support Matrix](#asr-support-matrix) |
 | Audio Analyzer Diarization (`models.diarization.device`) | ❌ No — CPU only |
@@ -499,7 +504,7 @@ The steps below configure NPU for `queue-service`; adapt the device variable for
 
 | Requirement | Details |
 | --- | --- |
-| Hardware | Intel Core Ultra (Meteor Lake or later) with integrated NPU |
+| Hardware | Intel® Core™ Ultra Series 1 or later, with integrated NPU |
 | Host driver | Intel NPU driver (`intel-npu-driver`) installed and loaded |
 | User-space runtime | `intel-level-zero-npu` package |
 | Host device | `/dev/accel/accel0` (or similar) present and accessible |
@@ -514,7 +519,7 @@ ls /dev/accel/
 
 ### 2 — Install the Intel NPU driver (if not already installed)
 
-Refer to the Intel NPU driver repository: <https://github.com/intel/linux-npu-driver/releases>. Installation varies by distribution. After installation:
+Refer to the [Intel NPU driver repository](https://github.com/intel/linux-npu-driver/releases). Installation varies by distribution. After installation:
 
 ```bash
 # Verify kernel driver is loaded
@@ -572,7 +577,7 @@ docker logs audio-analyzer 2>&1 | grep -i "Loading Model"  # expect: device=NPU
 curl -s -X POST http://localhost:8010/v1/audio/transcriptions -F "file=@your_sample.wav"
 ```
 
-If identity-service face/re-id is on NPU:
+If `identity-service` face detection and re-identification run on NPU:
 
 ```bash
 IDENTITY_DEVICE=NPU make up IDENTITY=true
@@ -586,7 +591,8 @@ docker logs identity-service 2>&1 | grep -i "face\|voice\|inference_ready"
 | Container unhealthy, `NPU not in available_devices` | NPU driver not loaded or `/dev/accel/accel0` not mapped | Verify host driver and set `ACCEL_MOUNT_PATH` |
 | `libopenvino_intel_npu_compiler_loader.so` missing | NPU compiler not in image | Rebuild the affected image with NPU user-space packages |
 | Slow first inference (20–60 s) | NPU compiler cache is empty (cold start) | Normal on first run; subsequent requests will be fast |
-| `audio-analyzer` crash-loops with `Check '!self_attn_nodes.empty()' failed` after setting `models.asr.device=NPU` | Model is `whisper-small` or larger — NPUW's self-attention pattern-matching fails to statically-shape the graph for that model size | Use `whisper-tiny` or `whisper-base` on NPU instead, or switch `models.asr.device` to `CPU`/`GPU` |
-| Non-NPU containers unhealthy after NPU config change | NPU-unrelated services picking up wrong env | Only modify the specific component's config (e.g. `QUEUE_DEVICE`, `IDENTITY_DEVICE`, `models.asr.device`) |
+| `audio-analyzer` crash-loops with `Check '!self_attn_nodes.empty()' failed` after setting `models.asr.device=NPU` | Model is `whisper-small` or larger — NPUW's self-attention pattern-matching fails to statically shape the graph for that model size | Use `whisper-tiny` or `whisper-base` on NPU instead, or switch `models.asr.device` to `CPU`/`GPU` |
+| Non-NPU containers unhealthy after NPU configuration change | NPU-unrelated services picking up the wrong environment variables | Only modify the specific component's configuration (e.g., `QUEUE_DEVICE`, `IDENTITY_DEVICE`, `models.asr.device`) |
 
-> **Cold-start note:** The OpenVINO™ NPU compiler caches compiled kernels inside the container under `/tmp/ov_cache/`. The first inference after a container restart takes significantly longer (20–60 s) while the cache warms up. This is expected behavior.
+> [!NOTE]
+> **Cold start:** The OpenVINO™ NPU compiler caches compiled kernels inside the container under `/tmp/ov_cache/`. The first inference after a container restart takes significantly longer (20–60 s) while the cache warms up. This is expected behavior.
