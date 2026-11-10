@@ -700,7 +700,10 @@ services:
       - rag_service_hf_cache:/app/rag-service/.cache/huggingface
       # Mount kiosk-specific domain config into the container.
       # Generic image → kiosk-aware at runtime via this mount.
-      - ./configs/rag-service:/app/rag-service/domain-config:ro
+      # KIOSK_MENU_DIR selects the menu (default ./configs = QuickBite). Set it
+      # to ./configs/menus/ranger-burgers for the North American sample menu;
+      # kiosk-core's ./configs/ordering mount below follows the same variable.
+      - ${KIOSK_MENU_DIR:-./configs}/rag-service:/app/rag-service/domain-config:ro
       # Mount kiosk domain plugins (ordering agent, guards) from the consuming
       # application. The rag-service image has an empty plugins/ mount point;
       # all domain Python code lives here in the smart-kiosk-assistant repo.
@@ -1141,7 +1144,10 @@ services:
     volumes:
       - generated_audio:/app/generated_audio
       - kiosk_db:/app/data
-      - ./configs/ordering:/app/configs/ordering:ro
+      # Menu catalogue and upsell rules; see KIOSK_MENU_DIR on rag-service.
+      # Switching menus needs `make reset-menu-db` first: the seeder adds and
+      # updates products in kiosk_db but never deletes them.
+      - ${KIOSK_MENU_DIR:-./configs}/ordering:/app/configs/ordering:ro
       - ./conversations:/app/conversations
       - ${KIOSK_RESULTS_HOST_DIR:-./results}:/app/results
     depends_on:

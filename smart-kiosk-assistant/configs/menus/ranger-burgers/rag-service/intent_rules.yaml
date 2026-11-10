@@ -1,0 +1,360 @@
+# Smart Kiosk — intent keyword rules for the ordering agent
+#
+# These lists drive the regex patterns built dynamically in ordering_agent.py
+# at startup (domain_config.build_*_regex()). They are QSR/food-specific and
+# must be replaced or extended when the rag-service is used in another domain
+# (healthcare, education, retail) via a different mounted config.
+#
+# Ranger Burgers (North American) variant of configs/rag-service/intent_rules.yaml.
+# Same four lists and the same design rules as the QuickBite Express original:
+#   - catalogue_keywords: generic menu/price phrases plus CATEGORY nouns only.
+#     Item nouns (shake, coffee, tea, chicken) stay out, because a catalogue
+#     match disables knowledge pre-grounding for ingredient/dietary questions.
+#   - domain_keywords: deliberately wide; a miss sends a 4+ word question to
+#     the out-of-scope refusal.
+#   - knowledge_keywords: outlet facts (hours, policies, dietary).
+# Indian-menu words (dosa, biryani, lassi, pepsi, roll, upi, parcel) are
+# replaced with the Ranger Burgers equivalents.
+
+# Words that signal the customer is asking about menu items, prices, or
+# availability. Triggers _CATALOGUE_QUERY_RE recovery guard and pre-grounding.
+catalogue_keywords:
+  - do you have
+  - have you got
+  - do you sell
+  - menu
+  - item
+  - items
+  - dish
+  - dishes
+  - serve
+  - serves
+  - offer
+  - offers
+  - available
+  - option
+  - options
+  - price
+  - prices
+  - cost
+  - costs
+  - how much
+  - burger
+  - burgers
+  - sandwich
+  - sandwiches
+  - nuggets
+  - side
+  - sides
+  - dessert
+  - desserts
+  - sweet
+  - sweets
+  - beverage
+  - beverages
+  - drink
+  - drinks
+  - combo
+  - combos
+  - meals
+  - pizza
+  - pizzas
+  - taco
+  - tacos
+  - hot dog
+  - hot dogs
+  - wings
+
+# Words that signal an order-mutation intent. Triggers _ORDER_ACTION_RE guard.
+order_action_keywords:
+  - confirm
+  - confirmed
+  - place the order
+  - place my order
+  - checkout
+  - check out
+  - finalize
+  - finalise
+  - proceed
+  - that's all
+  - that's it
+  - i'm done
+  - cancel
+  - remove
+  - pay
+
+# Broad vocabulary that marks a turn as "in-domain" for the kiosk.
+# Kept deliberately wide — false positives merely stay on today's path;
+# false negatives trigger the out-of-scope guard.
+domain_keywords:
+  - order
+  - orders
+  - cart
+  - bill
+  - total
+  - checkout
+  - pay
+  - payment
+  - price
+  - cost
+  - menu
+  - item
+  - items
+  - food
+  - eat
+  - drink
+  - drinks
+  - meal
+  - meals
+  - combo
+  - snack
+  - restaurant
+  - outlet
+  - kiosk
+  - store
+  - shop
+  - kitchen
+  - staff
+  - table
+  - seat
+  - seats
+  - seating
+  - sit
+  - sitting
+  - dining room
+  - lobby
+  - add
+  - added
+  - remove
+  - cancel
+  - confirm
+  - serve
+  - serves
+  - recommend
+  - suggest
+  - popular
+  - veg
+  - veggie
+  - vegan
+  - vegetarian
+  - halal
+  - allergen
+  - allergens
+  - allergy
+  - allergies
+  - gluten
+  - dairy
+  - dairy-free
+  - milk
+  - egg
+  - peanut
+  - spicy
+  - spiciest
+  - calorie
+  - calories
+  - ingredient
+  - ingredients
+  - burger
+  - burgers
+  - cheeseburger
+  - cheeseburgers
+  - sandwich
+  - sandwiches
+  - chicken
+  - nugget
+  - nuggets
+  - fries
+  - onion rings
+  - salad
+  - biscuit
+  - biscuits
+  - pancake
+  - pancakes
+  - hash rounds
+  - breakfast
+  - lunch
+  - dinner
+  - dessert
+  - desserts
+  - shake
+  - shakes
+  - milkshake
+  - milkshakes
+  - sundae
+  - pie
+  - cone
+  - soft serve
+  - ice cream
+  - beverage
+  - beverages
+  - coffee
+  - tea
+  - iced tea
+  - sweet tea
+  - soda
+  - cola
+  - root beer
+  - lemonade
+  - water
+  - refill
+  - refills
+  - kids
+  - kids meal
+  - toy
+  - sauce
+  - toppings
+  - cheese
+  - bacon
+  - pickle
+  - pickles
+  - onion
+  - onions
+  - mayo
+  - ketchup
+  - open
+  - opening
+  - close
+  - closing
+  - hours
+  - timing
+  - address
+  - location
+  - parking
+  - wifi
+  - delivery
+  - takeaway
+  - takeout
+  - to-go
+  - drive-thru
+  - drive thru
+  - drive-through
+  - offer
+  - offers
+  - discount
+  - deal
+  - deals
+  - coupon
+  - rewards
+  - loyalty
+  - app
+  - catering
+  - holiday
+  - washroom
+  - restroom
+  - restrooms
+  - bathroom
+  - bathrooms
+  - toilet
+  - napkin
+  - straw
+
+# Outlet/knowledge-base query words (hours, address, facilities).
+# Triggers _KNOWLEDGE_QUERY_RE pre-grounding.
+knowledge_keywords:
+  - tell me something about the restaurant
+  - tell me about your restaurant
+  - tell me something about this place
+  - about the restaurant
+  - about your restaurant
+  - about this place
+  - open
+  - opening
+  - closing
+  - hours
+  - timing
+  - breakfast
+  - lunch menu
+  - restaurant name
+  - address
+  - located
+  - location
+  - parking
+  - delivery
+  - deliveries
+  - takeaway
+  - takeout
+  - dine-in
+  - drive-thru
+  - drive thru
+  - drive-through
+  - stop taking orders
+  - last order
+  - wifi
+  - contact
+  - phone
+  - halal
+  - vegetarian
+  - vegan
+  - allergen
+  - allergens
+  - allergy
+  - allergies
+  - gluten
+  - dairy
+  - dairy-free
+  - ingredient
+  - ingredients
+  - what's in the
+  - what is in the
+  - whats in the
+  - what comes on
+  - comes on the
+  - made with
+  - contain
+  - contains
+  - spicy
+  - spiciest
+  - calorie
+  - calories
+  - payment
+  - card
+  - cash
+  - policy
+  - refund
+  - remake
+  - substitution
+  - substitutions
+  - loyalty
+  - rewards
+  - catering
+  - large group
+  - notice
+  - refill
+  - refills
+  - holiday
+  - thanksgiving
+  - christmas
+  - order ahead
+  - mobile order
+  - lost and found
+  - outside food
+  - restroom
+  - restrooms
+  - bathroom
+  - bathrooms
+  - washrooms
+  - toilets
+  - wheelchair
+  - seating
+
+# Category names the model uses when routing _force_catalogue() calls.
+# Each entry is a string the customer might say to identify a category,
+# mapped to what list_products(category=...) accepts. The first entry found
+# in the utterance wins, so the more specific words come first ("chicken
+# nuggets" must hit "nugget" before "chicken"). kiosk-core maps burger, side,
+# drink, beverage and dessert onto the plural categories; nugget, shake, fries,
+# sandwich and meal fall through to its product-name search.
+category_names:
+  - nugget
+  - shake
+  - fries
+  - sandwich
+  - chicken
+  - burger
+  - breakfast
+  - side
+  - beverage
+  - drink
+  - dessert
+  - meal
+  - kids

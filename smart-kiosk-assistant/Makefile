@@ -8,7 +8,7 @@
 .PHONY: help init-env setup-dirs setup-models download-sample-video check-env show-config \
 		build up down restart status logs \
 		logs-ovms logs-rag logs-core logs-ui logs-audio logs-tts logs-metrics \
-		test clean clean-metrics dev-build update-submodule update-submodules \
+		test clean clean-metrics reset-menu-db dev-build update-submodule update-submodules \
 		benchmark-v2v list-profiles validate-profile _write-provenance \
 		benchmark-matrix compare-profiles \
 		benchmark-venv check-benchmark-env install-host-deps
@@ -619,6 +619,9 @@ show-config: ## Print resolved configuration
 	@echo "  TTS_MODEL/RUNTIME = $(if $(TTS_MODEL),$(TTS_MODEL),(config default))/$(if $(TTS_RUNTIME),$(TTS_RUNTIME),(config default))"
 	@echo "  TTS_DTYPE         = $(if $(TTS_DTYPE),$(TTS_DTYPE),(config default))"
 	@echo ""
+	@echo "$(YELLOW)Menu:$(NC)"
+	@echo "  KIOSK_MENU_DIR    = $(if $(KIOSK_MENU_DIR),$(KIOSK_MENU_DIR),./configs (QuickBite default))"
+	@echo ""
 	@echo "$(YELLOW)Authentication:$(NC)"
 	@echo "  HF_TOKEN          = $$([ -n '$(HF_TOKEN)' ] && echo '***set***' || echo 'NOT SET')"
 	@echo ""
@@ -837,6 +840,20 @@ clean: ## Stop containers and remove named volumes
 	@$(MAKE) --no-print-directory clean-metrics
 	@echo "$(GREEN)✓ Containers stopped and volumes removed$(NC)"
 	@echo "  Note: models/ directory is preserved. Delete it manually to free ~4 GB."
+
+# Switching menus (KIOSK_MENU_DIR) needs an empty kiosk_db volume: kiosk-core
+# seeds products.yaml into SQLite on every start, but the seeder only adds or
+# updates rows and never deletes them, so the old menu's items would stay on
+# sale. Removes only kiosk_db (orders, QSR event log, loyalty profiles); model
+# and knowledge-base volumes are kept.
+reset-menu-db: down ## Remove the kiosk_db volume so the next 'make up' seeds only the selected menu
+	@vol="$(_COMPOSE_PROJECT)_kiosk_db"; \
+	if docker volume inspect "$$vol" >/dev/null 2>&1; then \
+		docker volume rm "$$vol" >/dev/null && echo "$(GREEN)✓ Removed volume $$vol$(NC)"; \
+	else \
+		echo "$(YELLOW)Volume $$vol not found; nothing to reset$(NC)"; \
+	fi
+	@echo "  Menu dir: $(if $(KIOSK_MENU_DIR),$(KIOSK_MENU_DIR),./configs (QuickBite default))"
 
 clean-metrics: ## Delete collected OS metrics dumps (metrics/)
 	@# The OS-level collectors write into ./metrics (bind-mounted to

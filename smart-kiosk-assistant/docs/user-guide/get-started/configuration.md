@@ -420,6 +420,63 @@ be compared on absolute latency only — it is *not* the `asr-gpu_tts-cpu` cell.
 
 See `configs/benchmark-profiles/README.md` for the full compatibility matrix.
 
+## Menu Selection (`KIOSK_MENU_DIR`)
+
+The kiosk ships with two sample menus. QuickBite Express is the default.
+Ranger Burgers is an opt-in North American menu.
+
+| Menu | `KIOSK_MENU_DIR` | Prices | Knowledge base file |
+| --- | --- | --- | --- |
+| QuickBite Express (default) | unset, or `./configs` | INR | `knowledge-base-samples/QuickBite-M.md` |
+| Ranger Burgers | `./configs/menus/ranger-burgers` | USD | `knowledge-base-samples/RangerBurgers-QSR-menu.md` |
+
+`KIOSK_MENU_DIR` selects the folder that `docker-compose.yml` mounts for two
+services. kiosk-core reads `ordering/products.yaml` and
+`ordering/upsell_rules.yaml` from it. rag-service reads
+`rag-service/agent_profile.yaml`, `intent_rules.yaml`, `reply_templates.yaml`
+and `guard_rules.json` from it. No image rebuild is needed.
+
+To switch to Ranger Burgers:
+
+1. Set `KIOSK_MENU_DIR=./configs/menus/ranger-burgers` in `.env`.
+2. Run `make reset-menu-db`.
+3. Run `make up`.
+4. Open the kiosk UI, select **Upload .txt / .md & Ingest**, and choose
+   `knowledge-base-samples/RangerBurgers-QSR-menu.md`.
+
+To go back to QuickBite, set `KIOSK_MENU_DIR=./configs` and repeat steps 2 to 4
+with `QuickBite-M.md`, or use the built-in QuickBite sample in the UI.
+
+Step 2 is required every time you change menus. kiosk-core seeds
+`products.yaml` into the `kiosk_db` volume on every start. The seeder adds and
+updates products but never deletes them, so without the reset the old menu's
+items stay orderable. `make reset-menu-db` stops the stack and removes only
+`kiosk_db`. Orders, the QSR event log and loyalty profiles in that volume are
+lost. Model caches and the knowledge-base vector store are kept.
+
+Step 4 replaces the knowledge base: the UI clears the current documents before
+it ingests the new file. Without a UI, use the rag-service API:
+
+```bash
+curl -X DELETE http://localhost:8020/api/v1/context
+curl -F "file=@knowledge-base-samples/RangerBurgers-QSR-menu.md" \
+  http://localhost:8020/api/v1/context/file
+```
+
+Known limitations of the Ranger Burgers menu:
+
+- Prices in the menu data and on screen are USD. Some spoken lines are
+  generated in code and still say "rupees", for example the confirmed order
+  total and the item list in a menu-guard reply. A follow-up change makes the
+  currency configurable.
+- Each product in `products.yaml` has an `aliases` list, such as
+  "medium soda" for `Fountain Drink, Medium`. kiosk-core does not read aliases
+  yet, so an order must use a name close to the menu name. A follow-up change
+  adds alias matching.
+
+A set of 1,051 test utterances for this menu, with the expected cart for each
+order, is in `Sample_data/ranger-burgers/`. See the README in that folder.
+
 ## Environment Variables
 
 `kiosk-core` has no configuration file. All settings are controlled through environment variables.
