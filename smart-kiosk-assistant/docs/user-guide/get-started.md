@@ -142,10 +142,9 @@ Hugging Face with the same account that owns the token, accept the license on
 - <https://huggingface.co/pyannote/segmentation-3.0>
 
 > [!NOTE]
-> If you do not want to accept these licenses, set
-  `KIOSK_CORE_DIARIZATION_ENABLED=false` in `.env`. The stack starts normally
-  and speech-to-text keeps working — only per-speaker attribution is
-  unavailable.
+> Diarization is off by default (`KIOSK_CORE_DIARIZATION_ENABLED=false`), so
+> these licenses are needed only if you set it to `true`. With it off,
+> speech-to-text works normally; only per-speaker attribution is unavailable.
 
 For Intel GPU inference (the default `TARGET_DEVICE=GPU`), set `RENDER_GID`
 so containers can access `/dev/dri`:
