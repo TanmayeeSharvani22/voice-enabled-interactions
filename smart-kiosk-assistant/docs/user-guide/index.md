@@ -50,6 +50,7 @@ models. `kiosk-core` and `kiosk-ui` are I/O-only.
 ./measuring-latency.md
 QSR MCP Surface <./qsr-mcp.md>
 ./api-reference.md
+./qsr-mcp.md
 ./troubleshooting.md
 Release Notes <./release-notes.md>
 
