@@ -1,0 +1,137 @@
+# Upsell Rules: Ranger Burgers (Store #218, Gilbert, Arizona)
+# Ported from the QuickBite Express rules in configs/ordering/upsell_rules.yaml:
+# same rule shapes and the same order (side, then drink, then dessert per
+# main category), mapped onto the Ranger Burgers catalogue.
+#
+# Rule structure:
+#   trigger_product_ids: list of product IDs that activate this rule  (optional)
+#   trigger_categories:  list of categories that activate this rule   (optional)
+#   suggest_product_ids: list of products to suggest                  (required)
+#   reason:              human-readable rationale shown to the user   (required)
+#
+# At least one of trigger_product_ids or trigger_categories must be set.
+# All suggest_product_ids MUST exist in ordering/products.yaml in this folder.
+# kiosk-core walks the rules top to bottom, skips items already in the cart,
+# and attaches the first KIOSK_CORE_UPSELL_MAX_SUGGESTIONS (default 1).
+#
+# Catalogue reference (id -> name, $):
+#   SIDE-002 Ranger Fries, Medium 2.49  | SIDE-004 Ranger Onion Rings 2.99
+#   SIDE-001 Ranger Fries, Small 1.99   | SIDE-003 Ranger Fries, Large 2.99
+#   BREAKFAST-003 Hash Rounds 1.99
+#   DRINK-002 Fountain Drink, Medium 1.79 | DRINK-005 Iced Tea, Sweet, Medium 1.79
+#   DRINK-011 Coffee, Medium 1.59
+#   DESSERT-001 Vanilla Shake 3.49 | DESSERT-004 Soft-Serve Cone 1.29
+#   DESSERT-005 Ranger Fried Apple Pie 1.49
+
+rules:
+  # -------------------------------------------------------------------------
+  # BURGERS: fries, a cold drink, then a dessert to finish
+  # -------------------------------------------------------------------------
+  - trigger_categories:
+      - burgers
+    suggest_product_ids:
+      - SIDE-002
+      - SIDE-004
+    reason: "Add Ranger Fries to complete your meal?"
+
+  - trigger_categories:
+      - burgers
+    suggest_product_ids:
+      - DRINK-002
+      - DRINK-005
+    reason: "Customers love pairing a cold drink with their burger!"
+
+  - trigger_categories:
+      - burgers
+    suggest_product_ids:
+      - DESSERT-001
+      - DESSERT-005
+    reason: "Leave room for dessert: a shake or a fried apple pie?"
+
+  # -------------------------------------------------------------------------
+  # CHICKEN SANDWICHES and NUGGETS: fries and a drink
+  # -------------------------------------------------------------------------
+  - trigger_categories:
+      - chicken
+      - nuggets
+    suggest_product_ids:
+      - SIDE-002
+      - DRINK-002
+    reason: "Round it off with Ranger Fries or a cold drink!"
+
+  - trigger_categories:
+      - chicken
+      - nuggets
+    suggest_product_ids:
+      - DESSERT-005
+    reason: "A fried apple pie is the perfect finish."
+
+  # -------------------------------------------------------------------------
+  # SIDES: a drink, and onion rings with fries
+  # -------------------------------------------------------------------------
+  - trigger_categories:
+      - sides
+    suggest_product_ids:
+      - DRINK-002
+      - DRINK-005
+    reason: "Grab a cold drink to go with your sides!"
+
+  - trigger_product_ids:
+      - SIDE-001
+      - SIDE-002
+      - SIDE-003
+    suggest_product_ids:
+      - SIDE-004
+    reason: "Make it a basket: add Ranger Onion Rings!"
+
+  # -------------------------------------------------------------------------
+  # BREAKFAST: coffee and hash rounds
+  # -------------------------------------------------------------------------
+  - trigger_categories:
+      - breakfast
+    suggest_product_ids:
+      - DRINK-011
+      - BREAKFAST-003
+    reason: "Add a hot coffee or Hash Rounds to your breakfast?"
+
+  # -------------------------------------------------------------------------
+  # BEVERAGES: nudge a snack or sweet treat
+  # -------------------------------------------------------------------------
+  - trigger_categories:
+      - beverages
+    suggest_product_ids:
+      - SIDE-002
+      - DESSERT-004
+    reason: "Pair your drink with Ranger Fries or a soft-serve cone!"
+
+  # -------------------------------------------------------------------------
+  # DESSERTS: a coffee to go alongside
+  # -------------------------------------------------------------------------
+  - trigger_categories:
+      - desserts
+    suggest_product_ids:
+      - DRINK-011
+    reason: "A hot coffee pairs well with dessert."
+
+  # -------------------------------------------------------------------------
+  # MEALS and KIDS: a dessert
+  # -------------------------------------------------------------------------
+  - trigger_categories:
+      - meals
+      - kids
+    suggest_product_ids:
+      - DESSERT-005
+      - DESSERT-004
+    reason: "Add a fried apple pie or a soft-serve cone?"
+
+  # -------------------------------------------------------------------------
+  # BESTSELLER cross-sell: dessert nudge on popular mains
+  # -------------------------------------------------------------------------
+  - trigger_product_ids:
+      - BURGER-002
+      - NUGGET-002
+      - CHICKEN-001
+    suggest_product_ids:
+      - DESSERT-005
+      - DESSERT-004
+    reason: "Treat yourself to a fried apple pie or a soft-serve cone!"
