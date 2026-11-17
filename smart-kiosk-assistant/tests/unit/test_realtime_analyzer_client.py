@@ -18,6 +18,8 @@ the connection.
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import time
 
 import pytest
@@ -242,3 +244,300 @@ class TestPreviewCoalescing:
         # than being dropped on the floor.
         assert len(queue.items) == 2
         assert client._preview_refresh_pending is False
+
+
+class _Clock:
+    """A settable time.monotonic() for the client module."""
+
+    def __init__(self, monkeypatch):
+        self.now = 0.0
+        monkeypatch.setattr(
+            "kiosk_core.realtime_analyzer_client.time.monotonic", lambda: self.now
+        )
+
+
+class TestCommittedTextSince:
+    """committed_text_since() feeds the endpoint-completeness check after an
+    adaptive-pause commit has cleared the preview. It must fail closed: any
+    commit that could predate the customer's last word, or that carried no
+    words, returns ""."""
+
+    def test_commit_sent_after_last_speech_is_returned(self, client):
+        _attach_fake_socket(client)
+        last_speech = time.monotonic()
+        client.commit()
+        client._apply_completed_event(
+            {"sequence": 1, "transcript": "Please add one Pepsi 330ML please."}
+        )
+        assert client.committed_text_since(last_speech) == "Please add one Pepsi 330ML please."
+
+    def test_commit_before_last_speech_is_not_returned(self, client):
+        _attach_fake_socket(client)
+        client.commit()
+        client._apply_completed_event({"sequence": 1, "transcript": "Please add one"})
+        last_speech = time.monotonic() + 1.0  # the customer kept talking afterwards
+        assert client.committed_text_since(last_speech) == ""
+
+    def test_commit_sent_before_last_speech_but_landing_after_it(self, client, monkeypatch):
+        # Slow ASR: the adaptive-pause commit goes out during a short pause,
+        # the customer says "no onions", and only then does the commit's
+        # result land. Its text stops short, so it must not end the turn.
+        clock = _Clock(monkeypatch)
+        _attach_fake_socket(client)
+        clock.now = 10.0
+        client.commit()
+        last_speech = 11.0
+        clock.now = 12.0
+        client._apply_completed_event({"sequence": 1, "transcript": "One classic burger."})
+        assert client.committed_text_since(last_speech) == ""
+
+    def test_commit_with_no_words_gets_no_event_and_later_events_fail_closed(
+        self, client, monkeypatch
+    ):
+        # The analyzer sends no completed event for a commit whose audio
+        # transcribed to nothing (audio-analyzer _commit_utterance returns
+        # early). Its stamp stays queued, so the next event takes it: an
+        # older stamp than its own commit's, which can only fail closed.
+        clock = _Clock(monkeypatch)
+        _attach_fake_socket(client)
+        clock.now = 1.0
+        client.commit()  # A
+        client._apply_completed_event({"sequence": 1, "transcript": "One burger."})
+        clock.now = 2.0
+        client.commit()  # B: silence only, no event
+        clock.now = 3.0
+        client.commit()  # C
+        client._apply_completed_event({"sequence": 2, "transcript": "One burger, no onions."})
+        assert client._latest_text_commit_sent_at == 2.0
+        assert client.committed_text_since(2.5) == ""
+        assert client.committed_text_since(1.5) == "One burger, no onions."
+
+    def test_each_event_takes_the_send_time_of_its_own_commit(self, client, monkeypatch):
+        clock = _Clock(monkeypatch)
+        _attach_fake_socket(client)
+        clock.now = 1.0
+        client.commit()
+        clock.now = 2.0
+        client.commit()
+        clock.now = 3.0
+        client._apply_completed_event({"sequence": 1, "transcript": "One burger."})
+        assert client._latest_text_commit_sent_at == 1.0
+        clock.now = 4.0
+        client._apply_completed_event({"sequence": 2, "transcript": "One burger, no onions."})
+        assert client._latest_text_commit_sent_at == 2.0
+        assert len(client._commit_sent_at) == 0
+
+    def test_stale_event_still_answers_its_commit(self, client):
+        _attach_fake_socket(client)
+        client._apply_completed_event({"sequence": 5, "transcript": "newer"})
+        client.commit()
+        client._apply_completed_event({"sequence": 2, "transcript": "older"})
+        assert len(client._commit_sent_at) == 0
+        assert client.committed_text_since(0.0) == ""
+
+    def test_event_with_no_commit_outstanding_fails_closed(self, client):
+        client._apply_completed_event({"sequence": 1, "transcript": "One burger please."})
+        assert client.committed_text_since(0.0) == ""
+
+    def test_unsent_commit_is_not_queued(self, client):
+        class _ClosedLoop:
+            def call_soon_threadsafe(self, fn, *args):
+                raise RuntimeError("loop closed")
+
+        client._send_queue = _FakeQueue()
+        client._loop = _ClosedLoop()
+        client.commit()
+        assert len(client._commit_sent_at) == 0
+
+    def test_no_reference_fails_closed(self, client):
+        _attach_fake_socket(client)
+        client.commit()
+        client._apply_completed_event({"sequence": 1, "transcript": "One burger please."})
+        assert client.committed_text_since(None) == ""
+
+    def test_no_commit_yet_fails_closed(self, client):
+        assert client.committed_text_since(time.monotonic()) == ""
+
+
+# ── analyzer low-latency mode ──────────────────────────────────────────────
+
+FRAME_BYTES = 640  # 20 ms of 16 kHz int16 PCM
+
+
+@pytest.fixture
+def ll_client():
+    """A client that asks for the analyzer's low-latency mode."""
+    c = RealtimeAnalyzerClient(
+        ws_url="ws://audio-analyzer:8010/v1/realtime",
+        session_id="sess-ll",
+        speaker_scope_id=None,
+        diarization=False,
+        language=None,
+        low_latency=True,
+        sample_rate=16000,
+    )
+    real_loop = c._loop
+    yield c
+    real_loop.close()
+
+
+def _session_event(event_type: str, low_latency=None) -> dict:
+    """A transcription_session.* event as audio-analyzer sends it.
+
+    ``low_latency=None`` leaves the field out, as an analyzer without the
+    mode does.
+    """
+    session = {"id": "sess-ll", "turn_detection": None}
+    if low_latency is not None:
+        session["low_latency"] = low_latency
+    return {"type": event_type, "session": session}
+
+
+def _speech_then_silence(client, speech_frames: int, silence_frames: int) -> None:
+    for _ in range(speech_frames):
+        client.send_frame(b"\x01" * FRAME_BYTES, is_speech=True)
+    for _ in range(silence_frames):
+        client.send_frame(b"\x00" * FRAME_BYTES, is_speech=False)
+
+
+class _FakeWebSocket:
+    """Records what the client sends; replays scripted server events."""
+
+    def __init__(self, events: list[dict]):
+        self.sent: list[dict] = []
+        self._events = [json.dumps(e) for e in events]
+
+    async def send(self, raw: str) -> None:
+        self.sent.append(json.loads(raw))
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> str:
+        await asyncio.sleep(0)
+        if not self._events:
+            raise StopAsyncIteration
+        return self._events.pop(0)
+
+
+def _run_main(client, monkeypatch, events: list[dict]) -> _FakeWebSocket:
+    """Run the client's connect-and-negotiate coroutine against a fake socket."""
+    ws = _FakeWebSocket(events)
+
+    class _Connect:
+        async def __aenter__(self):
+            return ws
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(
+        "kiosk_core.realtime_analyzer_client.websockets.connect",
+        lambda *args, **kwargs: _Connect(),
+    )
+
+    async def _drive():
+        client._send_queue = asyncio.Queue()
+        await client._main()
+
+    asyncio.run(_drive())
+    return ws
+
+
+class TestLowLatencyNegotiation:
+    """The mode is asked for in its own session.update and is only in effect
+    once the analyzer echoes it. An analyzer without the mode (the pinned
+    edge-ai-libraries build) ignores the field and never echoes it."""
+
+    def test_request_goes_in_its_own_session_update(self, ll_client, monkeypatch):
+        # One update with only the new field: an analyzer that rejects it
+        # still applies turn_detection=None from the first one.
+        ws = _run_main(ll_client, monkeypatch, [_session_event("transcription_session.created")])
+        updates = [m for m in ws.sent if m["type"] == "session.update"]
+        assert len(updates) == 2
+        assert "low_latency" not in updates[0]["session"]
+        assert updates[0]["session"]["turn_detection"] is None
+        assert updates[1]["session"] == {"low_latency": {"enabled": True}}
+
+    def test_analyzer_without_the_mode_leaves_it_off(self, ll_client, monkeypatch):
+        _run_main(ll_client, monkeypatch, [
+            _session_event("transcription_session.created"),
+            _session_event("transcription_session.updated"),
+            _session_event("transcription_session.updated"),
+        ])
+        assert ll_client.low_latency_active() is False
+
+    def test_rejected_request_leaves_it_off(self, ll_client, monkeypatch):
+        _run_main(ll_client, monkeypatch, [
+            _session_event("transcription_session.created"),
+            _session_event("transcription_session.updated"),
+            {"type": "error", "error": {"type": "invalid_request_error", "message": "bad"}},
+        ])
+        assert ll_client.low_latency_active() is False
+
+    def test_echoed_mode_turns_it_on(self, ll_client, monkeypatch):
+        _run_main(ll_client, monkeypatch, [
+            _session_event("transcription_session.created", {"enabled": False}),
+            _session_event("transcription_session.updated", {"enabled": False}),
+            _session_event("transcription_session.updated", {"enabled": True}),
+        ])
+        assert ll_client.low_latency_active() is True
+
+    def test_echo_with_mode_disabled_turns_it_off(self, ll_client):
+        ll_client._apply_session_event(_session_event("transcription_session.updated", {"enabled": True}))
+        ll_client._apply_session_event(_session_event("transcription_session.updated", {"enabled": False}))
+        assert ll_client.low_latency_active() is False
+
+
+class TestLowLatencyMessages:
+    """While the mode is in effect, previews and commits carry the
+    trailing-silence hint, and a preview in silence asks for the whole
+    buffer. Without the echo the client sends exactly what it sent before."""
+
+    def test_unconfirmed_mode_sends_plain_preview_and_commit(self, ll_client):
+        queue = _attach_fake_socket(ll_client)
+        _speech_then_silence(ll_client, speech_frames=10, silence_frames=5)
+        ll_client.preview()
+        ll_client.commit()
+        sent = [json.loads(item) for item in queue.items if "append" not in item]
+        assert sent == [
+            {"type": "input_audio_buffer.preview"},
+            {"type": "input_audio_buffer.commit"},
+        ]
+
+    def test_preview_in_silence_asks_for_the_whole_buffer(self, ll_client):
+        ll_client._apply_session_event(_session_event("transcription_session.updated", {"enabled": True}))
+        queue = _attach_fake_socket(ll_client)
+        _speech_then_silence(ll_client, speech_frames=10, silence_frames=5)
+        ll_client.preview()
+        preview = json.loads(queue.items[-1])
+        assert preview["type"] == "input_audio_buffer.preview"
+        assert preview["full"] is True
+        assert preview["trailing_silence_ms"] == pytest.approx(100.0)
+
+    def test_preview_during_speech_keeps_the_trailing_window(self, ll_client):
+        ll_client._apply_session_event(_session_event("transcription_session.updated", {"enabled": True}))
+        queue = _attach_fake_socket(ll_client)
+        _speech_then_silence(ll_client, speech_frames=10, silence_frames=0)
+        ll_client.preview()
+        preview = json.loads(queue.items[-1])
+        assert "full" not in preview
+        assert preview["trailing_silence_ms"] == 0.0
+
+    def test_commit_carries_the_hint_and_resets_the_count(self, ll_client):
+        ll_client._apply_session_event(_session_event("transcription_session.updated", {"enabled": True}))
+        queue = _attach_fake_socket(ll_client)
+        _speech_then_silence(ll_client, speech_frames=10, silence_frames=25)
+        ll_client.commit()
+        commit = json.loads(queue.items[-1])
+        assert commit["type"] == "input_audio_buffer.commit"
+        assert commit["trailing_silence_ms"] == pytest.approx(500.0)
+        assert "full" not in commit
+        # The analyzer cleared its buffer, so the count starts again from 0
+        # and the earlier speech no longer counts: silence alone is not a
+        # finished utterance worth a full preview.
+        _speech_then_silence(ll_client, speech_frames=0, silence_frames=10)
+        ll_client.preview()
+        preview = json.loads(queue.items[-1])
+        assert preview["trailing_silence_ms"] == pytest.approx(200.0)
+        assert "full" not in preview

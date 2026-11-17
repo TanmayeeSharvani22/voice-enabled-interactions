@@ -31,13 +31,14 @@ this is the furthest point it can observe. In the live hands-free UI the
 browser additionally reports when playback actually began, recorded
 separately as `voice_to_voice_speaker_ms`.
 
+> [!NOTE]
 > **"Time to first audio" is retired.** It named different spans in
-> different places. Use voice-to-voice latency, and state which of its two
+> different places. Use **"voice-to-voice latency"**, and state which of its two
 > parts you mean.
 
 ## The opener
 
-By default the kiosk plays a short cached acknowledgement ("One moment.")
+By default, the kiosk plays a short cached acknowledgement ("One moment.")
 as soon as it decides the turn has ended, before the answer is ready. When
 it does, the first sound ready for the speaker is the opener, so
 `voice_to_voice_ms` measures the opener — which is a real thing the
@@ -66,8 +67,8 @@ with `sys.executable`, so the host interpreter needs its own dependencies.
 
 `make benchmark` handles this automatically. It builds a small venv
 (`.venv-benchmark`, from `tests/benchmarks/requirements.txt`) and launches the
-orchestrator with it, so the run no longer depends on what the system
-`python3` happens to have installed. Two things are checked before the stack
+orchestrator with it, so the run no longer depends on what version of `python3`
+the system happens to have installed. Two things are checked before the stack
 is started, by `make check-benchmark-env`:
 
 | Requirement | Why | If missing |
@@ -79,7 +80,7 @@ is started, by `make check-benchmark-env`:
 runs `silencedetect` to find where the speaker actually stopped, from the
 waveform — the zero point for voice-to-voice latency, deliberately independent
 of the pipeline's own VAD. Without it that function returns `None` and the
-harness silently falls back to detector-based timing, i.e. the pipeline grades
+harness silently falls back to detector-based timing, i.e., the pipeline grades
 its own endpointing and the numbers stop being comparable with other runs.
 
 Both are verified up front deliberately. A missing host dependency is not a
@@ -147,7 +148,7 @@ on the strength of leftover numbers from the previous run.
 
 ### `early_commit_count` — check this first
 
-In a benchmark run the customer's last word is taken from the **test clip
+In a benchmark run, the customer's last word is taken from the **test clip
 itself** (where speech ends in the WAV), not from the kiosk's own voice
 activity detector. Endpointing is part of what is being measured, so
 measuring it against its own decision would always report roughly zero.
@@ -201,7 +202,7 @@ Counters are trimmed to the measured window before consolidation, so
 utilization reflects the turns rather than being diluted by the health
 wait, model warm-up and teardown.
 
-kiosk-core runs as uid 1000. If `results/` is not writable by that uid,
+`kiosk-core` runs as UID `1000`. If `results/` is not writable by that UID,
 latency events cannot be recorded and the benchmark reports zero
 transactions even though every turn succeeded. A warning is logged at
 startup if this is the case.

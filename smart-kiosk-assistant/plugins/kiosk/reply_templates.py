@@ -386,14 +386,29 @@ _LIST_RESULT_TOOLS = frozenset({
     "get_popular_products",
 })
 
-# Explicit cart-mutation intent. Deliberately narrow: a false NEGATIVE here
-# just costs one LLM call (today's behaviour), while a false POSITIVE could
-# swallow an order. Bare "order" is not enough — "what's in my order" is a
-# read; only "order a/one/the <thing>" is an instruction to buy.
+# Explicit cart-mutation intent. Bare "order" is not enough — "what's in my
+# order" is a read; only "order a/one/the <thing>" is an instruction to buy.
+#
+# This also gates directive mode (ordering_agent.chat), so a false NEGATIVE is
+# not cheap: the turn falls to the tool-calling path. On an internal Panther
+# Lake test system (order-fastpath), "I would like one Classic Chicken Burger"
+# and "I will have one Spicy Chicken Crunch Burger" reached the first LLM token
+# about 7x later on that path than "Please add one ..." did in directive mode.
+# So the everyday ordering phrasings are listed too: "I'd like", "I'll have",
+# "can I get", "give me", "I want a". "I'd like to <verb>" counts only for
+# ordering verbs, so "I'd like to explore burgers" / "to know ..." stay
+# questions.
+_QTY = r"(?:a|an|one|two|three|four|five|six|\d+|the|some|my)"
 _MUTATION_INTENT_RE = re.compile(
     r"\b(?:add|adding|buy|purchase|remove|removing|delete|drop|cancel|"
     r"confirm|checkout|check\s+out|place\s+(?:the|my)\s+order|"
-    r"order\s+(?:me\s+)?(?:a|an|one|two|three|four|five|\d+|the)\b)",
+    r"order\s+(?:me\s+)?" + _QTY + r"\b|"
+    r"(?:i|we)(?:'d|\s+would)\s+like\s+(?:to\s+(?:order|get|have|add|buy|grab|try)\b|(?!to\b))|"
+    r"(?:i|we)(?:'ll|\s+will)\s+(?:have|take|get|go\s+with)\b|"
+    r"(?:can|could|may)\s+(?:i|we)\s+(?:get|have)\s+" + _QTY + r"\b|"
+    r"(?:give|get)\s+me\s+" + _QTY + r"\b|"
+    r"let\s+me\s+(?:get|have)\b|"
+    r"(?:i|we)\s+(?:want|need)\s+" + _QTY + r"\b)",
     re.IGNORECASE,
 )
 
@@ -410,6 +425,88 @@ def is_browse_intent(utterance: str) -> bool:
         must be allowed to continue to the mutating call.
     """
     return not _MUTATION_INTENT_RE.search(utterance or "")
+
+
+# Hesitation words a customer says while choosing ("um", "uh", "er").
+_FILLER = r"(?:u+m+|u+h+m*|e+r+m*|h+m+|well|so|okay|ok|and|also|like|maybe)"
+
+# An ordering lead-in with no item after it: "I'll have um...", "Can I get
+# a", "Let me get, uh,". The customer has not said what they want yet.
+_LEAD_IN_ONLY_RE = re.compile(
+    r"^\s*(?:" + _FILLER + r"[\s,.…]+)*"
+    r"(?:(?:i|we)(?:'d|\s+would)\s+like(?:\s+to\s+(?:order|get|have))?|"
+    r"(?:i|we)(?:'ll|\s+will)\s+(?:have|take|get|go\s+with)|"
+    r"(?:can|could|may)\s+(?:i|we)\s+(?:get|have|order)|"
+    r"let\s+me\s+(?:get|have)|(?:give|get)\s+me|"
+    r"(?:i|we)\s+(?:want|need)|(?:i|we)\s+wanna)"
+    r"(?:[\s,.…]+(?:" + _FILLER + r"|a|an|the))*"
+    r"[\s,.…?!]*$",
+    re.IGNORECASE,
+)
+
+
+def is_lead_in_only(utterance: str) -> bool:
+    """Return True when the utterance starts an order but names nothing.
+
+    Args:
+        utterance: The customer's raw message for this turn.
+
+    Returns:
+        ``True`` for "I'll have um..." or "Can I get a", where the kiosk
+        took its turn before the customer said the item.
+    """
+    return bool(_LEAD_IN_ONLY_RE.match(utterance or ""))
+
+
+# Replies that answer the kiosk rather than name an item: agreement,
+# hesitation, a stall ("Hold on", "Let me think"), and the ways a customer
+# says they are done. Several can follow each other ("Never mind, that's
+# all"). Joined to a lead-in they would read as an order ("I'll have um No
+# thanks") and a decline would no longer close the order.
+_REPLY_PART = (
+    r"(?:yes|yeah|yep|no|nope|nah|sure|ok(?:ay)?|hmm+|u+m+|u+h+|actually|"
+    r"no,?\s+thanks?(?:\s+you)?|thanks?(?:\s+you)?|please|"
+    r"that'?s\s+(?:all|it|everything)|that\s+(?:is|will\s+be)\s+all|"
+    r"nothing(?:\s+(?:else|more))?|never\s*mind|forget\s+it|"
+    r"i'?m\s+(?:good|done|all\s+set)|all\s+set|"
+    r"hold\s+on|hang\s+on|wait(?:\s+a\s+(?:sec(?:ond)?|minute|moment))?|"
+    r"(?:one|a|just\s+a)\s+(?:sec(?:ond)?|minute|moment)|let\s+me\s+(?:think|see))"
+)
+_NOT_AN_ITEM_RE = re.compile(
+    r"^\s*(?:" + _FILLER + r"[\s,.…]+)*" + _REPLY_PART
+    + r"(?:[\s,.…!]+" + _REPLY_PART + r")*[\s,.…?!]*$",
+    re.IGNORECASE,
+)
+
+
+def join_lead_in(message: str, history: list[dict[str, str]] | None) -> str:
+    """Join the item the customer names to their unfinished lead-in.
+
+    Args:
+        message: The customer's utterance for this turn.
+        history: Earlier turns as ``{"role", "content"}`` dicts.
+
+    Returns:
+        "<lead-in> <message>" when the previous customer turn was only a
+        lead-in and this turn is not a question, a request of its own, or a
+        reply such as "No thanks" or "That's all"; otherwise ``message``
+        unchanged.
+    """
+    previous = next(
+        (t.get("content", "") for t in reversed(history or []) if t.get("role") == "user"),
+        "",
+    )
+    if not message or not is_lead_in_only(previous) or not is_browse_intent(message):
+        return message
+    if _NOT_AN_ITEM_RE.match(message):
+        return message
+    if (
+        "?" in message
+        or re.match(r"\s*(?:what|which|how|do|does|is|are|can)\b", message, re.IGNORECASE)
+        or is_price_query_intent(message)
+    ):
+        return message
+    return f"{previous.strip().rstrip('.…?!').strip()} {message.strip()}"
 
 
 # Single-item price/cost questions only — deliberately narrow. General

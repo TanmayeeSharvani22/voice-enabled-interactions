@@ -5,10 +5,10 @@
 # Smart Kiosk Assistant - Makefile
 # =============================================================================
 
-.PHONY: help init-env setup-dirs setup-models download-sample-video check-env show-config \
+.PHONY: help init-env setup-dirs setup-models setup-silero-vad download-sample-video check-env show-config \
 		build up down restart status logs \
 		logs-ovms logs-rag logs-core logs-ui logs-audio logs-tts logs-metrics \
-		test clean clean-metrics dev-build update-submodule update-submodules \
+		test clean clean-metrics reset-menu-db dev-build update-submodule update-submodules \
 		benchmark-v2v list-profiles validate-profile _write-provenance \
 		benchmark-matrix compare-profiles \
 		benchmark-venv check-benchmark-env install-host-deps
@@ -278,11 +278,9 @@ export KIOSK_CORE_QUEUE_SERVICE_ENABLED = $(if $(_QUEUE_ON),true,false)
 # In registry mode (REGISTRY=true or a registry name) they are pulled, like
 # metrics-collector. With REGISTRY=false they are NOT built here; the locally
 # tagged intel/{audio-analyzer,text-to-speech}:${RELEASE_TAG} image is used as
-# is -- build it once directly from the edge-ai-libraries fork
-# (docker compose build in that repo, or `make build` before this split), then
-# it is reused. The fork source lives at
-# ../edge-ai-libraries/microservices/{audio-analyzer,text-to-speech} and must be
-# kept in sync with upstream open-edge-platform/edge-ai-libraries.
+# is -- build it once directly from upstream open-edge-platform/edge-ai-libraries
+# (microservices/{audio-analyzer,text-to-speech}) at the commit pinned in
+# docs/user-guide/get-started/build-from-source.md, then it is reused.
 
 # Colors
 RED    := \033[0;31m
@@ -303,6 +301,7 @@ help: ## Show this help message
 	@echo "  make init-env          Create .env from .env.example"
 	@echo "  make setup-dirs        Create required runtime directories"
 	@echo "  make setup-models      Download OVMS LLM model (Qwen3-4B) via setup_models.sh"
+	@echo "  make setup-silero-vad  Download and verify kiosk-core's Silero VAD model (local builds run this)"
 	@echo "  make download-sample-video  Download sample_1/sample_2 videos into SAMPLE_DATA_DIR"
 	@echo "  make check-env         Validate .env and required variables"
 	@echo "  make show-config       Print resolved configuration"
@@ -415,6 +414,18 @@ setup-models: ## Download the OVMS LLM model (Qwen3-4B) via setup_models.sh
 	fi
 	@echo "$(GREEN)✓ Model download complete$(NC)"
 
+# kiosk_core/models/silero_vad.onnx is not in git and the kiosk-core image
+# bakes in whatever is on disk (COPY . .). Every target that builds kiosk-core
+# locally depends on this, so the image never ships without the model.
+# setup_models.sh owns the URL and the pinned sha256; this only calls it.
+setup-silero-vad: ## Download and verify kiosk-core's Silero VAD model (local builds run this)
+	@./setup_models.sh --silero-only || { \
+		echo "$(RED)✗ kiosk_core/models/silero_vad.onnx is missing or failed its checksum, so kiosk-core was not built or started.$(NC)"; \
+		echo "  Fix the download (network or proxy), then run: ./setup_models.sh --silero-only"; \
+		echo "  To build without Silero on purpose, set KIOSK_CORE_SILERO_VAD_ENABLED=false in .env."; \
+		exit 1; \
+	}
+
 download-sample-video: setup-dirs ## Download sample videos (sample_1, sample_2) into SAMPLE_DATA_DIR (URLs from .env)
 	@echo "$(BLUE)Downloading sample videos into $(SAMPLE_DATA_DIR)...$(NC)"
 	@mkdir -p "$(SAMPLE_DATA_DIR)"
@@ -463,13 +474,14 @@ check-env: ## Validate .env and all required variables before running the stack
 	fi; \
 	\
 	if [ -z "$(HF_TOKEN)" ]; then \
-		if [ "$(KIOSK_CORE_DIARIZATION_ENABLED)" = "false" ]; then \
+		case "$$(echo '$(KIOSK_CORE_DIARIZATION_ENABLED)' | tr 'A-Z' 'a-z')" in ""|false|0|no) DIAR_OFF=1;; *) DIAR_OFF=0;; esac; \
+		if [ "$$DIAR_OFF" = "1" ]; then \
 			echo "  $(YELLOW)⚠ HF_TOKEN is not set$(NC) (OK — diarization is disabled)"; \
 		else \
 			echo "  $(RED)✗ HF_TOKEN is not set$(NC)"; \
 			echo "    Required for speaker diarization (pyannote/segmentation-3.0)."; \
 			echo "    Set it in .env  →  https://huggingface.co/settings/tokens"; \
-			echo "    Or add KIOSK_CORE_DIARIZATION_ENABLED=false to .env to skip diarization."; \
+			echo "    Or set KIOSK_CORE_DIARIZATION_ENABLED=false in .env to skip diarization."; \
 			ERRORS=$$((ERRORS+1)); \
 		fi; \
 	else \
@@ -619,6 +631,9 @@ show-config: ## Print resolved configuration
 	@echo "  TTS_MODEL/RUNTIME = $(if $(TTS_MODEL),$(TTS_MODEL),(config default))/$(if $(TTS_RUNTIME),$(TTS_RUNTIME),(config default))"
 	@echo "  TTS_DTYPE         = $(if $(TTS_DTYPE),$(TTS_DTYPE),(config default))"
 	@echo ""
+	@echo "$(YELLOW)Menu:$(NC)"
+	@echo "  KIOSK_MENU_DIR    = $(if $(KIOSK_MENU_DIR),$(KIOSK_MENU_DIR),./configs (QuickBite default))"
+	@echo ""
 	@echo "$(YELLOW)Authentication:$(NC)"
 	@echo "  HF_TOKEN          = $$([ -n '$(HF_TOKEN)' ] && echo '***set***' || echo 'NOT SET')"
 	@echo ""
@@ -640,7 +655,14 @@ show-config: ## Print resolved configuration
 # Build
 # =============================================================================
 
-build: check-env ## Pull images (default with .env); REGISTRY=false builds locally
+# Only a local build needs the Silero model on disk. A pulled kiosk-core image
+# carries its own copy, and kiosk-core checks for it at startup either way.
+# `up` depends on it too: docker compose up builds a missing kiosk-core image.
+# KIOSK_CORE_SILERO_VAD_ENABLED=false (the RMS VAD on purpose) skips the check.
+_SILERO_ON        = $(if $(filter false False FALSE 0 no No NO,$(KIOSK_CORE_SILERO_VAD_ENABLED)),,true)
+_SILERO_BUILD_DEP = $(if $(and $(filter false FALSE,$(REGISTRY)),$(_SILERO_ON)),setup-silero-vad,)
+
+build: check-env $(_SILERO_BUILD_DEP) ## Pull images (default with .env); REGISTRY=false builds locally
 	@echo "$(BLUE)Preparing Docker images...$(NC)"
 	@# set -e: without it this whole recipe is one `cmd; cmd; cmd` shell line
 	@# whose exit status is that of the LAST command -- the tolerant
@@ -671,7 +693,7 @@ build: check-env ## Pull images (default with .env); REGISTRY=false builds local
 			fi; \
 		done; \
 	else \
-		echo "$(YELLOW)  Pulling audio-analyzer and text-to-speech from registry (image-only; built once from the edge-ai-libraries fork)...$(NC)"; \
+		echo "$(YELLOW)  Pulling audio-analyzer and text-to-speech from registry (image-only; built from upstream edge-ai-libraries)...$(NC)"; \
 		REGISTRY_REPO=$(_DOCKER_REGISTRY) $(COMPOSE_BASE) pull audio-analyzer text-to-speech; \
 	fi; \
 	REGISTRY_REPO=$(_DOCKER_REGISTRY) $(COMPOSE_BASE) pull metrics-collector || \
@@ -682,7 +704,7 @@ build: check-env ## Pull images (default with .env); REGISTRY=false builds local
 # Up / Down
 # =============================================================================
 
-up: check-env setup-dirs clean-metrics ## Start all services
+up: check-env setup-dirs $(_SILERO_BUILD_DEP) clean-metrics ## Start all services
 	@echo "$(BLUE)Starting Smart Kiosk Assistant...$(NC)"
 	@# Resolve HF offline mode before bringing anything up. Without egress and
 	@# without a warm cache, audio-analyzer/text-to-speech can never become
@@ -817,7 +839,7 @@ logs-identity: ## Tail identity-service logs
 # Development
 # =============================================================================
 
-dev-build: ## Rebuild and restart a single service: make dev-build SVC=rag-service
+dev-build: $(if $(and $(filter kiosk-core,$(SVC)),$(_SILERO_ON)),setup-silero-vad,) ## Rebuild and restart a single service: make dev-build SVC=rag-service
 	@if [ -z "$(SVC)" ]; then \
 		echo "$(RED)Error: specify a service — e.g. make dev-build SVC=rag-service$(NC)"; \
 		exit 1; \
@@ -837,6 +859,20 @@ clean: ## Stop containers and remove named volumes
 	@$(MAKE) --no-print-directory clean-metrics
 	@echo "$(GREEN)✓ Containers stopped and volumes removed$(NC)"
 	@echo "  Note: models/ directory is preserved. Delete it manually to free ~4 GB."
+
+# Switching menus (KIOSK_MENU_DIR) needs an empty kiosk_db volume: kiosk-core
+# seeds products.yaml into SQLite on every start, but the seeder only adds or
+# updates rows and never deletes them, so the old menu's items would stay on
+# sale. Removes only kiosk_db (orders, QSR event log, loyalty profiles); model
+# and knowledge-base volumes are kept.
+reset-menu-db: down ## Remove the kiosk_db volume so the next 'make up' seeds only the selected menu
+	@vol="$(_COMPOSE_PROJECT)_kiosk_db"; \
+	if docker volume inspect "$$vol" >/dev/null 2>&1; then \
+		docker volume rm "$$vol" >/dev/null && echo "$(GREEN)✓ Removed volume $$vol$(NC)"; \
+	else \
+		echo "$(YELLOW)Volume $$vol not found; nothing to reset$(NC)"; \
+	fi
+	@echo "  Menu dir: $(if $(KIOSK_MENU_DIR),$(KIOSK_MENU_DIR),./configs (QuickBite default))"
 
 clean-metrics: ## Delete collected OS metrics dumps (metrics/)
 	@# The OS-level collectors write into ./metrics (bind-mounted to

@@ -68,12 +68,14 @@ To rebuild any service from source instead of pulling, see
 ## Documentation Map
 
 - Start here: [Overview](./docs/user-guide/index.md) and [Get Started](./docs/user-guide/get-started.md)
+  - Hardware and OS prerequisites: [System Requirements](./docs/user-guide/get-started/system-requirements.md)
+  - Build details: [Build from Source](./docs/user-guide/get-started/build-from-source.md)
+  - Container startup and verification: [Run Container](./docs/user-guide/get-started/run-container.md)
+  - Environment variables, model selection, and inference device: [Configuration](./docs/user-guide/get-started/configuration.md)
 - Architecture and request flow: [How It Works](./docs/user-guide/how-it-works.md)
-- Hardware and OS prerequisites: [System Requirements](./docs/user-guide/get-started/system-requirements.md)
-- Build details: [Build from Source](./docs/user-guide/get-started/build-from-source.md)
-- Container startup and verification: [Run Container](./docs/user-guide/get-started/run-container.md)
+- A guide to latency terms: [Measuring Latency](./docs/user-guide/measuring-latency.md)
+- QSR MCP Surface: [QSR MCP](./docs/user-guide/qsr-mcp.md)
 - `kiosk-core` API: [API Reference](./docs/user-guide/api-reference.md)
-- Environment variables, model selection, and inference device: [Configuration](./docs/user-guide/get-started/configuration.md)
 - Troubleshooting: [Troubleshooting](./docs/user-guide/troubleshooting.md)
 - Release notes: [Release Notes](./docs/user-guide/release-notes.md)
 - RAG service: [rag-service/README.md](rag-service/README.md)

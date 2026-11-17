@@ -294,7 +294,7 @@ def validate(env: dict[str, str], check_hardware: bool = True) -> Report:
     tts_model = (env.get("TTS_MODEL") or "kokoro").strip()
     tts_runtime = (env.get("TTS_RUNTIME") or "kokoro").strip().lower()
     tts_dtype = (env.get("TTS_DTYPE") or "int8").strip().lower()
-    tts_speaker = (env.get("TTS_SPEAKER") or "am_michael").strip()
+    tts_speaker = (env.get("TTS_SPEAKER") or "af_heart").strip()
     tts_variant = (env.get("TTS_MODEL_VARIANT") or "custom_voice").strip().lower()
 
     llm_dev = _dev(env, "TARGET_DEVICE", "GPU")
@@ -382,7 +382,7 @@ def validate(env: dict[str, str], check_hardware: bool = True) -> Report:
 
     # -- diarization -------------------------------------------------------
     if diar_dev != "CPU":
-        enabled = (env.get("KIOSK_CORE_DIARIZATION_ENABLED") or "true").lower()
+        enabled = (env.get("KIOSK_CORE_DIARIZATION_ENABLED") or "false").lower()
         msg = (
             f"DIARIZATION_DEVICE={diar_dev}. The diarization component loads via "
             "torch.device(<value>); PyTorch has no 'gpu' device string (Intel "

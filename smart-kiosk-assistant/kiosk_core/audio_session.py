@@ -393,6 +393,20 @@ _INCOMPLETE_TAIL_WORDS = frozenset(
 _ENDPOINT_WORD_RE = re.compile(r"[^a-z' ]")
 
 
+def _analyzer_low_latency_requested() -> bool:
+    """True when kiosk-core should ask audio-analyzer for its low-latency mode.
+
+    The analyzer applies the mode only with diarization off, so it is not
+    requested otherwise. Asking is not enough to change behaviour: the
+    session also needs RealtimeAnalyzerClient.low_latency_active(), which
+    only turns true once the analyzer confirms the mode.
+    """
+    return (
+        config.DEFAULT_ANALYZER_LOW_LATENCY_ENABLED
+        and not config.DEFAULT_DIARIZATION_ENABLED
+    )
+
+
 def _looks_complete(text: str, min_words: int) -> bool:
     """True when a transcript reads like a finished utterance.
 
@@ -660,6 +674,8 @@ class BaseAudioSession:
                     speaker_scope_id=self.agent_session_id,
                     diarization=config.DEFAULT_DIARIZATION_ENABLED,
                     language=request.language,
+                    low_latency=_analyzer_low_latency_requested(),
+                    sample_rate=request.sample_rate,
                 )
                 self.realtime_client.start(
                     timeout=config.DEFAULT_REALTIME_CONNECT_TIMEOUT_SECONDS
@@ -784,6 +800,16 @@ class BaseAudioSession:
         # Count of turns where the final tail-chunk flush was skipped because
         # it held no unflushed speech, purely for observability/metrics.
         self._final_flush_skipped = False
+        # Filler-only turn re-listen (see config.DEFAULT_FILLER_RELISTEN_ENABLED).
+        # _filler_dropped: _flush_chunk dropped a filler-only ASR result since
+        # the last re-listen. _relisten_at: monotonic instant of the last
+        # re-listen; a later filler-only endpoint only re-listens again if new
+        # speech arrived after it. _stale_snapshot_text: the realtime
+        # analyzer's cumulative text at re-listen time, so the final flush
+        # never mistakes that old snapshot for the resumed turn's result.
+        self._filler_dropped = False
+        self._relisten_at: float | None = None
+        self._stale_snapshot_text: str | None = None
 
         # ── Adaptive VAD state ─────────────────────────────────────────────
         # `request.silence_threshold` is the seed/fallback gate. When adaptive
@@ -1051,6 +1077,19 @@ class BaseAudioSession:
     def _run(self) -> None:
         raise NotImplementedError
 
+    def _stream_frame(self, frame: np.ndarray, is_speech: bool) -> None:
+        """Send one captured speech-phase frame over the realtime socket.
+
+        Our VAD's verdict goes with the frame only when the analyzer
+        low-latency mode is requested, the one place it is used (the client
+        turns it into trailing_silence_ms). Otherwise the call is the same as
+        before.
+        """
+        if _analyzer_low_latency_requested():
+            self.realtime_client.send_frame(frame.tobytes(), is_speech=is_speech)
+        else:
+            self.realtime_client.send_frame(frame.tobytes())
+
     def _process_frame_stream(self, frame_iterator) -> tuple[str, str | None]:
         chunk_frames: list[np.ndarray] = []
         silence_run_seconds = 0.0
@@ -1064,6 +1103,9 @@ class BaseAudioSession:
         # near-empty buffers) and when adaptive_flush_pause_seconds > 0.
         adaptive_pause = self.request.adaptive_flush_pause_seconds
         _adaptive_flushed = False  # guard: only one adaptive flush per silence run
+        # True only when the turn ended on trailing silence (either endpoint
+        # branch below), the one case a filler-only turn may re-listen.
+        endpoint_committed = False
 
         try:
             for frame in frame_iterator:
@@ -1116,7 +1158,7 @@ class BaseAudioSession:
                         chunk_frames.append(frame)
                         self._captured_samples += len(frame)
                         if self._streaming_active:
-                            self.realtime_client.send_frame(frame.tobytes())
+                            self._stream_frame(frame, is_speech=True)
                         # Every frame reaching this branch is speech by
                         # construction (the preroll-drain loop above only
                         # ever buffered frames while still deciding, and this
@@ -1129,7 +1171,7 @@ class BaseAudioSession:
                 chunk_frames.append(frame)
                 self._captured_samples += len(frame)
                 if self._streaming_active:
-                    self.realtime_client.send_frame(frame.tobytes())
+                    self._stream_frame(frame, is_speech=is_speech)
 
                 if is_speech:
                     # Overwritten on every speech frame -- only the LAST one
@@ -1386,12 +1428,31 @@ class BaseAudioSession:
                 # ONLY; transcript_parts (the actual turn text) is still
                 # built exclusively by real commits below.
                 _endpoint_candidate_transcript = _assemble_transcript(self.transcript_parts)
+                # Streaming mode, after the adaptive-pause commit: that commit
+                # cleared the preview and its words are not in transcript_parts
+                # until the final flush, so the candidate above stays empty and
+                # the turn used to wait out the full silence_timeout_seconds
+                # even when the correct transcript ("Please add one chocolate
+                # brownie to my order.") had already landed well before it. A
+                # commit SENT after the last speech frame holds every word up
+                # to it and will not change, so it needs no stability window.
+                # Its landing time is no guide: under slow ASR a commit sent
+                # mid-utterance can land after the last word. See
+                # RealtimeAnalyzerClient.committed_text_since().
+                _committed_final = False
                 if self._streaming_active:
                     _preview_text = self.realtime_client.latest_preview_text()
                     if _preview_text:
                         _endpoint_candidate_transcript = (
                             f"{_endpoint_candidate_transcript} {_preview_text}".strip()
                         )
+                    elif _adaptive_flushed:
+                        _committed_text = self.realtime_client.committed_text_since(
+                            self._t_last_speech_frame
+                        )
+                        if _committed_text:
+                            _endpoint_candidate_transcript = _committed_text
+                            _committed_final = True
                 if (
                     config.DEFAULT_ENDPOINT_COMPLETE_ENABLED
                     and silence_run_seconds >= config.DEFAULT_ENDPOINT_SHORT_SECONDS
@@ -1423,7 +1484,10 @@ class BaseAudioSession:
                     # wall-clock -- see _endpoint_transcript_stable's
                     # docstring for why: bursty frame delivery can advance
                     # silence_run_seconds far faster than real time elapses.
-                    and self._endpoint_transcript_stable(_endpoint_candidate_transcript, silence_run_seconds)
+                    and (
+                        _committed_final
+                        or self._endpoint_transcript_stable(_endpoint_candidate_transcript, silence_run_seconds)
+                    )
                 ):
                     logger.info(
                         "[ENDPOINT] session=%s | early commit at %.2fs "
@@ -1436,6 +1500,7 @@ class BaseAudioSession:
                     self._endpoint_shortcut_fired = True
                     end_reason = "silence_timeout"
                     self._log_last_word_spoken(silence_run_seconds)
+                    endpoint_committed = True
                     break
 
                 if silence_run_seconds >= self.request.silence_timeout_seconds:
@@ -1452,6 +1517,7 @@ class BaseAudioSession:
                         config.DEFAULT_ENDPOINT_SHORT_SECONDS,
                     )
                     self._log_last_word_spoken(silence_run_seconds)
+                    endpoint_committed = True
                     break
 
                 if (self._captured_samples / self.request.sample_rate) >= self.request.max_session_seconds:
@@ -1586,11 +1652,67 @@ class BaseAudioSession:
         # voice_to_voice_ms by however long this join blocked — on some turns
         # the single largest stage in the whole clock. See
         # WallTimes.final_flush_wait_ms.
+        #
+        # Wait for the final chunk's ASR first: a filler-only result ("Uh...")
+        # means the customer paused to think, not that the turn is over, so
+        # keep reading frames on this same session instead of ending it. See
+        # config.DEFAULT_FILLER_RELISTEN_ENABLED.
+        self._flush_queue.join()
+        if self._should_relisten_after_filler(endpoint_committed, final_status):
+            self._reset_for_relisten()
+            return self._process_frame_stream(frame_iterator)
         self._flush_queue.put(None)
         self._flush_queue.join()
         self._final_flush_wait_seconds = time.monotonic() - _t_final_flush_start
 
         return final_status, end_reason
+
+    def _should_relisten_after_filler(self, endpoint_committed: bool, final_status: str) -> bool:
+        """True when this turn produced nothing but dropped filler.
+
+        Only for a turn the trailing-silence endpoint ended: a stop, a
+        superseding session, max_session_seconds, an error, or the browser's
+        end-of-stream signal still end the session as before. A second
+        filler-only endpoint with no new speech since the last re-listen ends
+        the session too, so a silent customer can never keep it open.
+        Attributes are read with getattr defaults because test harnesses
+        build sessions via __new__() without running __init__.
+        """
+        if not (config.DEFAULT_FILLER_RELISTEN_ENABLED and endpoint_committed):
+            return False
+        if final_status != "completed" or self._stop_event.is_set():
+            return False
+        if self.transcript_parts or not getattr(self, "_filler_dropped", False):
+            return False
+        if getattr(self, "_rejected_speech_chunks", 0):
+            return False  # speaker-filter rejections keep their own handling
+        relisten_at = getattr(self, "_relisten_at", None)
+        if relisten_at is not None and (self._t_last_speech_frame or 0.0) <= relisten_at:
+            return False
+        return True
+
+    def _reset_for_relisten(self) -> None:
+        """Clear the per-turn endpoint state so the resumed turn is timed and
+        endpointed on the customer's next words, not on the dropped filler."""
+        logger.info(
+            "[ENDPOINT] session=%s | turn held only filler (dropped), "
+            "still listening for the rest of the turn",
+            self.session_id,
+        )
+        self._filler_dropped = False
+        self._relisten_at = time.monotonic()
+        # The filler WAS transcribed; nothing captured so far is pending.
+        self._unconfirmed_speech_pending = False
+        self._chunk_has_speech = False
+        self._endpoint_stable_transcript = None
+        self._endpoint_stable_since = None
+        self._endpoint_wait_seconds = None
+        self._endpoint_shortcut_fired = None
+        self._final_flush_skipped = False
+        self._t_endpoint_decision = None
+        self._t_last_word = None
+        if self._streaming_active:
+            self._stale_snapshot_text = self.realtime_client.latest_snapshot().get("text") or None
 
     def _flush_worker(self) -> None:
         """Background worker that transcribes queued chunks one at a time.
@@ -3009,7 +3131,36 @@ class BaseAudioSession:
                 # A chunk WITH new frames must still always commit and wait
                 # -- only a content-free commit is safe to skip this way.
                 _cached = self.realtime_client.latest_snapshot()
-                if not frames and (_cached.get("text") or _cached.get("segments")):
+                # Analyzer low-latency mode, once the analyzer has confirmed
+                # it. Until then every flush commits as before.
+                _low_latency = (
+                    _analyzer_low_latency_requested()
+                    and self.realtime_client.low_latency_active()
+                )
+                if _low_latency and not is_final:
+                    # No intermediate commit. The analyzer keeps the audio
+                    # and the final commit covers it, answered from the last
+                    # full preview. An intermediate commit here would land
+                    # almost at once and clear the preview text the endpoint
+                    # check is still reading in this same burst of frames.
+                    # Nothing was transcribed, so no session state moves.
+                    logger.info(
+                        "[CHUNK] session=%s | low-latency mode: no intermediate commit",
+                        self.session_id,
+                    )
+                    return
+                elif (
+                    not _low_latency
+                    and not frames
+                    and (_cached.get("text") or _cached.get("segments"))
+                    and _cached.get("text") != getattr(self, "_stale_snapshot_text", None)
+                ):
+                    # Never in low-latency mode: there no earlier flush
+                    # committed this turn's audio, so the final flush must
+                    # always commit, even when the cache holds older text.
+                    # After a filler-only re-listen the cache still holds the
+                    # filler turn's snapshot until the next commit lands; that
+                    # old snapshot must not stand in for the resumed turn.
                     payload = _cached
                 else:
                     self.realtime_client.commit(
@@ -3191,6 +3342,7 @@ class BaseAudioSession:
                     self.session_id, text[:60],
                 )
                 text = ""
+                self._filler_dropped = True
             if text:
                 # Drop a leading run of words the transcript already ends
                 # with. The two dedup paths above use different cursors — the

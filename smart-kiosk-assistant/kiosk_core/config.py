@@ -33,6 +33,17 @@ DEFAULT_ANALYZER_STREAMING_ENABLED = os.getenv(
     "KIOSK_CORE_ANALYZER_STREAMING_ENABLED", "false"
 ).lower() not in ("false", "0", "no")
 
+# Ask audio-analyzer for its low-latency realtime mode (streaming only).
+# Previews sent during silence cover the whole utterance, and the final
+# commit reuses the last one instead of decoding again. Needs an analyzer
+# build with the mode. The kiosk changes its commits only after the analyzer
+# confirms the mode, so an older analyzer keeps today's behaviour. Not
+# requested while KIOSK_CORE_DIARIZATION_ENABLED is true, because the
+# analyzer applies the mode only with diarization off. Default off.
+DEFAULT_ANALYZER_LOW_LATENCY_ENABLED = os.getenv(
+    "KIOSK_CORE_ANALYZER_LOW_LATENCY_ENABLED", "false"
+).lower() not in ("false", "0", "no")
+
 # Hands-free browser sessions stream raw int16 PCM frames over a persistent
 # WebSocket (`/api/v1/sessions/stream`) instead of posting WAV chunks over
 # separate REST requests. Additive and reversible: push-to-talk keeps the REST
@@ -818,8 +829,9 @@ DEFAULT_PREROLL_SECONDS = float(os.getenv("KIOSK_CORE_PREROLL_SECONDS", "0.3"))
 # Cost is small and bounded: a ~2MB int8 ONNX graph pinned to one intra-op
 # thread, run on 0.1s frames.
 #
-# Fails open — the constructor falls back to the RMS VAD if onnxruntime or the
-# model file is unavailable, so this flag cannot break a session. Set
+# Required when enabled: kiosk-core refuses to start if the model file is
+# missing or won't load (see require_silero_vad_model). A session whose sample
+# rate Silero does not support still falls back to the RMS VAD. Set
 # KIOSK_CORE_SILERO_VAD_ENABLED=false to restore the RMS-only path.
 KIOSK_CORE_SILERO_VAD_ENABLED = os.getenv("KIOSK_CORE_SILERO_VAD_ENABLED", "true").lower() not in (
     "false",
@@ -853,9 +865,10 @@ DEFAULT_WAKEWORD_TIMEOUT_SECONDS = float(os.getenv("KIOSK_CORE_WAKEWORD_TIMEOUT_
 DEFAULT_WAKEWORD_INFERENCE_FRAMEWORK = os.getenv("KIOSK_CORE_WAKEWORD_INFERENCE_FRAMEWORK", "onnx")
 
 # Speaker diarization — master switch and semantic fallback sensitivity.
-# Set KIOSK_CORE_DIARIZATION_ENABLED=false to revert to flat-text behavior
-# (no speaker filtering; all segments forwarded as-is).
-DEFAULT_DIARIZATION_ENABLED = os.getenv("KIOSK_CORE_DIARIZATION_ENABLED", "true").lower() not in ("false", "0", "no")
+# Off by default: flat-text behavior (no speaker filtering; all segments
+# forwarded as-is). Set KIOSK_CORE_DIARIZATION_ENABLED=true to turn on
+# primary-speaker filtering; it needs HF_TOKEN and the Pyannote licences.
+DEFAULT_DIARIZATION_ENABLED = os.getenv("KIOSK_CORE_DIARIZATION_ENABLED", "false").lower() not in ("false", "0", "no")
 # Diarization on INTERMEDIATE chunks only (the max-chunk-size-cap flush and
 # the adaptive-pause pre-warm flush — i.e. every chunk except the final tail
 # at true endpoint, which always keeps full diarization regardless of this
@@ -936,6 +949,18 @@ DEFAULT_DIARIZATION_ENROLL_MIN_SECONDS = float(
 # Default OFF pending live A/B measurement against the current behavior.
 DEFAULT_SKIP_EMPTY_FINAL_FLUSH_ENABLED = os.getenv(
     "KIOSK_CORE_SKIP_EMPTY_FINAL_FLUSH_ENABLED", "false"
+).lower() not in ("false", "0", "no")
+# Keep listening after a filler-only turn. When the endpoint commits right
+# after "Uh" / "Um" (customer pauses to think), ASR returns only the filler,
+# which _flush_chunk drops. Without this the session then ended silently
+# with an empty transcript, and the rest of the customer's audio was refused
+# (409 on the next chunk push), so the customer heard nothing. When enabled,
+# a silence-endpoint turn whose only ASR output was dropped filler resumes
+# listening on the same session, and the customer's next words become the
+# turn. A session that stays silent after the filler still ends at the next
+# silence timeout (or max_session_seconds), exactly as before.
+DEFAULT_FILLER_RELISTEN_ENABLED = os.getenv(
+    "KIOSK_CORE_FILLER_RELISTEN_ENABLED", "true"
 ).lower() not in ("false", "0", "no")
 # Minimum domain-keyword overlap ratio to accept a fallback segment when the
 # primary customer is silent for an entire chunk.

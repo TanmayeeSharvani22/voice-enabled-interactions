@@ -40,6 +40,7 @@ from plugins.kiosk import menu_guard
 from plugins.kiosk import price_guard
 from plugins.kiosk import removal_guard
 from plugins.kiosk import reply_templates
+from plugins.kiosk import upsell_accept
 from agentic.adk_runtime import create_adk_model, create_runner, create_session_service
 from agentic.mcp_client import MCPTool, bootstrap_mcp_tools, call_tool, get_all_tools
 from agentic.tools import knowledge_lookup_tool as knowledge_tool
@@ -777,6 +778,10 @@ _CONFIRM_INTENT_RE = re.compile(
 # on a decline embedded in a real request ("no burger, just fries"). ``_close``
 # in chat() additionally gates this on there being an active cart with items, so
 # a bare "no thanks" with no order simply falls through to the normal path.
+# Spoken when the customer starts an order but has not named the item yet
+# (see reply_templates.is_lead_in_only). Short, so they can carry on.
+_LEAD_IN_ONLY_REPLY = "Sure. What would you like?"
+
 _DECLINE_CLOSE_RE = re.compile(
     r"^\s*(?:(?:no|nope|nah)[,.!\s]*)?"
     r"(?:thank(?:s| you| you very much)|thanks a lot|"
@@ -2532,6 +2537,70 @@ class OrderingAgent:
         # None/0 even though the MCP round-trip genuinely happened.
         llm_metrics.reset()
 
+        # An ordering lead-in with no item ("I'll have um...") means the kiosk
+        # took its turn before the customer said what they want. Directive
+        # mode answered it by copying its prompt example: "Got it. A chicken
+        # burger." with a Classic Chicken Burger the customer never named in
+        # the cart. Ask for the item instead, and read the next turn as the
+        # end of the same sentence.
+        message = reply_templates.join_lead_in(message, history)
+        if reply_templates.is_lead_in_only(message):
+            logger.info(
+                "[AGENT] Ordering lead-in without an item — asking for it | session=%s",
+                session_id,
+            )
+            _speculative_ctx.reset(speculative_token)
+            _tool_call_log_ctx.reset(tool_call_log_token)
+            return {
+                "reply": _LEAD_IN_ONLY_REPLY,
+                "tool_calls": [],
+                "tool_call_detail": [],
+                "llm_ms": None,
+                "llm_ttft_ms": None,
+                "llm_calls": 0,
+                "retrieval_ms": None,
+                "mcp_ms": None,
+                "mcp_calls": 0,
+                "guard_ms": None,
+                "template_ms": None,
+                "templated": True,
+                "streamed": "",
+            }
+
+        # ── Upsell-acceptance fast path ─────────────────────────────────
+        # "Yes, please add that." right after "Would you also like <item>?"
+        # adds <item>. The offer was composed in code from the last tool
+        # result, so the item is known exactly; the model was not resolving
+        # "that" and confirmed the order instead (see upsell_accept.py). Runs
+        # before directive mode because that is the path that misread it.
+        # Gated to a whole-utterance acceptance of an offer in the previous
+        # assistant turn; anything else falls through unchanged.
+        offered = None if speculative else upsell_accept.offered_item(history)
+        if offered and upsell_accept.is_acceptance(message):
+            _tpl_start = time.monotonic()
+            spoken = await self._accept_upsell(offered, user_id, session_id)
+            if spoken:
+                llm_metrics.record_template((time.monotonic() - _tpl_start) * 1000)
+                template = llm_metrics.template_snapshot()
+                _speculative_ctx.reset(speculative_token)
+                _tool_call_log_ctx.reset(tool_call_log_token)
+                return {
+                    "reply": spoken,
+                    "tool_calls": ["place_order"],
+                    "tool_call_detail": [],
+                    "llm_ms": None,
+                    "llm_ttft_ms": None,
+                    "llm_calls": 0,
+                    "retrieval_ms": None,
+                    "mcp_ms": None,
+                    "mcp_calls": 1,
+                    "guard_ms": None,
+                    "template_ms": template["ms"],
+                    "templated": True,
+                    "streamed": "",
+                }
+            # The add failed or needs a choice: let the normal path handle it.
+
         # Directive mode: one tool-free completion that carries both the cart
         # mutation and the speech, so TTS can start while the model is still
         # generating. Restricted to turns with explicit mutation intent, plus
@@ -2563,6 +2632,16 @@ class OrderingAgent:
                     if result is not None:
                         _speculative_ctx.reset(speculative_token)
                         _tool_call_log_ctx.reset(tool_call_log_token)
+                        try:
+                            await self._record_directive_turn(
+                                user_id, session_id, history, message, result,
+                            )
+                        except Exception:
+                            # The reply is already final; a later tool-path
+                            # turn only loses this turn's context.
+                            logger.warning(
+                                "[DIRECTIVE] could not record turn in ADK session", exc_info=True
+                            )
                         return result
             except Exception:
                 # Never let this optimisation break a turn — the
@@ -3187,6 +3266,48 @@ class OrderingAgent:
         total_txt = f" The total is {int(total) if float(total).is_integer() else total} rupees." if total is not None else ""
         return f"Your order is confirmed. Your order number is {order_id}.{total_txt} Enjoy your meal!"
 
+    async def _accept_upsell(self, item_name: str, user_id: str, session_id: str) -> str:
+        """Add one of the item the customer just accepted, and template the reply.
+
+        Args:
+            item_name: The item named in the previous turn's offer.
+            user_id: Owner of the draft order.
+            session_id: Conversation id, for the cart memory and logging.
+
+        Returns:
+            The spoken reply built from the tool result, or an empty string
+            when the add did not cleanly succeed (the caller then falls back).
+        """
+        try:
+            payload = action_result.unwrap(await call_tool(
+                "place_order",
+                {
+                    "user_id": user_id,
+                    "items": [{"product_id": item_name, "quantity": 1}],
+                    "dry_run": False,
+                },
+            ))
+        except Exception:
+            logger.exception("[AGENT] Upsell accept failed | session=%s item=%r", session_id, item_name)
+            return ""
+        spoken = reply_templates.speak_order_mutation(payload) if payload else None
+        if not spoken:
+            logger.warning(
+                "[AGENT] Upsell accept not clean, falling back | session=%s item=%r result=%s",
+                session_id, item_name, str(payload)[:200],
+            )
+            return ""
+        # Same cart memory update _mcp_fn makes after a place_order.
+        cart = self._cart_states.setdefault(session_id, _CartState())
+        if isinstance(payload.get("items"), list):
+            cart.known_items = payload["items"]
+        upsell = payload.get("upsell_suggestions") or []
+        cart.pending_upsell = (
+            upsell[0].get("product") if upsell and isinstance(upsell[0], dict) else None
+        )
+        logger.info("[AGENT] Upsell accepted, added %r | session=%s", item_name, session_id)
+        return spoken
+
     async def _force_knowledge(self, message: str, session_id: str) -> str:
         """Answer an outlet question from the knowledge base, deterministically.
 
@@ -3433,6 +3554,146 @@ class OrderingAgent:
             "[AGENT] Created session user=%s session=%s history_turns=%d",
             user_id, session_id, len(initial_events),
         )
+
+    async def _append_text_event(self, session: Any, role: str, text: str) -> None:
+        """Append one plain-text turn to an ADK session.
+
+        Args:
+            session: The ADK session to append to.
+            role: ``"user"`` or ``"model"``.
+            text: What was said.
+        """
+        from google.genai import types as genai_types
+
+        await self._append_parts_event(session, role, [genai_types.Part(text=text)])
+
+    async def _append_parts_event(self, session: Any, role: str, parts: list[Any]) -> None:
+        """Append one event with the given content parts to an ADK session.
+
+        Args:
+            session: The ADK session to append to.
+            role: ``"user"`` or ``"model"``. Tool results use ``"user"`` with
+                the agent as author, the same shape the ADK runner writes.
+            parts: ``google.genai`` content parts.
+        """
+        from google.adk.events import Event
+        from google.genai import types as genai_types
+
+        author = "user" if role == "user" and not any(
+            getattr(p, "function_response", None) for p in parts
+        ) else self._agent.name
+        await self._session_service.append_event(
+            session,
+            Event(author=author, content=genai_types.Content(role=role, parts=parts)),
+        )
+
+    async def _append_cart_event(
+        self, session: Any, session_id: str, tool_name: str, payload: dict[str, Any]
+    ) -> None:
+        """Append one tool call and its result, the shape the ADK runner writes.
+
+        Args:
+            session: The ADK session to append to.
+            session_id: The conversation's session identifier, for the call id.
+            tool_name: The tool that returned ``payload``.
+            payload: The tool's result: the cart after the call.
+        """
+        from google.genai import types as genai_types
+
+        call_id = f"recorded-{session_id}-{len(session.events)}"
+        args: dict[str, Any] = {}
+        if tool_name in action_result.CLAIM_TOOLS[action_result.ITEM_ADDED]:
+            args = {"items": [
+                {"product_id": a.get("name"), "quantity": a.get("quantity", 1)}
+                for a in payload.get("just_added") or []
+                if isinstance(a, dict)
+            ]}
+        await self._append_parts_event(session, "model", [genai_types.Part(
+            function_call=genai_types.FunctionCall(id=call_id, name=tool_name, args=args),
+        )])
+        await self._append_parts_event(session, "user", [genai_types.Part(
+            function_response=genai_types.FunctionResponse(
+                id=call_id, name=tool_name,
+                response=_compress_tool_result(
+                    tool_name, {"result": json.dumps(payload, default=str)}
+                ),
+            ),
+        )])
+
+    async def _record_directive_turn(
+        self,
+        user_id: str,
+        session_id: str,
+        history: list[dict[str, str]] | None,
+        message: str,
+        result: dict[str, Any],
+    ) -> None:
+        """Add a turn answered in directive mode to the tool-calling path's state.
+
+        Directive mode answers without ADK, so its turns are missing from the
+        session the tool-calling path reads. A later tool-path turn then sees
+        only the turns that went through ADK, and a follow-up such as "and a
+        Pepsi." or "Double Chicken Tower" has nothing to attach to.
+
+        The cart change is recorded as a tool call and result, the shape the
+        tool path writes. With the text alone, "and a Pepsi." after a
+        directive-mode burger came back as place_order(burger, Pepsi): the
+        model read the burger as still to be ordered and added a second one.
+        The per-session ``_CartState`` is updated from the same payload, as
+        ``_mcp_fn`` does after a tool-path cart write.
+
+        Args:
+            user_id: The customer's user identifier.
+            session_id: The conversation's session identifier.
+            history: Turns before this one, used to create the session when
+                this is its first turn.
+            message: The customer's utterance for this turn.
+            result: What ``directive_mode.run_turn`` returned.
+        """
+        await self._ensure_session(user_id, session_id, history)
+        session = await self._session_service.get_session(
+            app_name=self._agent.name, user_id=user_id, session_id=session_id,
+        )
+        if session is None:
+            return
+        await self._append_text_event(session, "user", message)
+
+        payload = result.get("cart_payload")
+        tools = result.get("tool_calls") or []
+        if isinstance(payload, dict) and tools:
+            # ``payload`` is the last tool's result, and it already holds the
+            # whole cart after every change this turn ("add a burger, remove
+            # the fries" ends in remove_from_order's cart). Only that call is
+            # recorded: an earlier place_order has no result of its own here,
+            # and recording it with no items would misstate what was added.
+            last = tools[-1]
+            await self._append_cart_event(session, session_id, last, payload)
+
+            # Same rules as _mcp_fn after a tool-path call.
+            cart_state = self._cart_states.setdefault(session_id, _CartState())
+            if last in action_result.CLAIM_TOOLS[action_result.ORDER_CONFIRMED]:
+                # A confirmed order is closed. Keeping its items would make
+                # cart_state_guard drop them from the next order as re-adds.
+                if payload.get("status") == "confirmed":
+                    cart_state.known_items = []
+                    cart_state.pending_upsell = None
+            elif isinstance(payload.get("items"), list):
+                cart_state.known_items = payload["items"]
+                # A removal leaves the open upsell offer as it was.
+                if last not in action_result.CLAIM_TOOLS[action_result.ITEM_REMOVED]:
+                    upsell = payload.get("upsell_suggestions") or []
+                    cart_state.pending_upsell = (
+                        upsell[0].get("product")
+                        if upsell and isinstance(upsell[0], dict)
+                        else None
+                    )
+
+        # Without the total and upsell tail, as directive mode keeps its own
+        # history (see directive_mode.strip_facts_tail): the model imitates a
+        # tail it sees in earlier replies. The numbers are in the tool result.
+        reply = directive_mode.strip_facts_tail(result.get("reply", ""))
+        if reply:
+            await self._append_text_event(session, "model", reply)
 
 
 # ---------------------------------------------------------------------------

@@ -102,7 +102,7 @@ def build_manifest(
             "tts": env.get("TTS_MODEL", "kokoro"),
             "tts_runtime": env.get("TTS_RUNTIME", "kokoro"),
             "tts_dtype": env.get("TTS_DTYPE", "int8"),
-            "tts_speaker": env.get("TTS_SPEAKER", "am_michael"),
+            "tts_speaker": env.get("TTS_SPEAKER", "af_heart"),
             "llm": env.get("OVMS_MODEL_NAME", "OpenVINO/Qwen3-4B-int8-ov"),
         },
         "run": {
@@ -120,11 +120,11 @@ def build_manifest(
             "queue_enabled": "false" if forced_off else queue_enabled,
             "diarization_enabled": (
                 "false" if forced_off
-                else env.get("KIOSK_CORE_DIARIZATION_ENABLED", "true")
+                else env.get("KIOSK_CORE_DIARIZATION_ENABLED", "false")
             ),
             "queue_enabled_requested": queue_enabled,
             "diarization_enabled_requested": env.get(
-                "KIOSK_CORE_DIARIZATION_ENABLED", "true"
+                "KIOSK_CORE_DIARIZATION_ENABLED", "false"
             ),
             "forced_off_by_orchestrator": (
                 ["queue_service", "rtsp_streamer", "diarization"]

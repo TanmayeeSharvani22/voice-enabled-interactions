@@ -8,7 +8,7 @@ Base URL (default): `http://127.0.0.1:8012`
 GET /health
 ```
 
-**Response**
+**Response:**
 
 ```json
 {"status": "ok"}
@@ -24,7 +24,7 @@ GET /api/v1/devices
 
 Returns audio input devices available on the server host. This is only relevant when calling the server-side microphone capture endpoint.
 
-**Response**
+**Response:**
 
 ```json
 {
@@ -43,7 +43,7 @@ Returns audio input devices available on the server host. This is only relevant 
 GET /api/v1/sessions
 ```
 
-**Response**
+**Response:**
 
 ```text
 {
@@ -79,10 +79,10 @@ Content-Type: application/json
 
 Begins microphone capture on the server. Returns immediately; the session runs in the background.
 
-**Request Body**
+**Request Body:**
 
 | Field | Type | Default | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `device` | `int \| string \| null` | system default | PortAudio input device index or name |
 | `sample_rate` | `int` | `16000` | Capture sample rate in Hz (`8000`–`48000`) |
 | `chunk_seconds` | `float` | `4.0` | Audio chunk length sent to audio-analyzer (`0.5`–`30`) |
@@ -99,7 +99,7 @@ Begins microphone capture on the server. Returns immediately; the session runs i
 | `tts_language` | `string \| null` | `"English"` | Language hint for TTS |
 | `tts_instructions` | `string \| null` | env default | Style instructions for TTS |
 
-**Example**
+**Example:**
 
 ```bash
 curl --noproxy '*' -X POST http://127.0.0.1:8012/api/v1/sessions/start \
@@ -126,29 +126,31 @@ Content-Type: multipart/form-data
 
 Feeds an uploaded audio file through the same chunking, ASR, RAG, and TTS pipeline as a session started through `/api/v1/sessions/start`. Useful for testing without capture hardware.
 
+> [!NOTE]
 > **Async operation** — the POST returns immediately with `"status": "running"`. The audio is processed in the background. Poll `GET /api/v1/sessions/{session_id}` until `status` is `"completed"` or `"failed"`, then read the `transcript` and `response` fields. See the [Polling Pattern](#polling-pattern) section for a ready-to-use shell loop.
 
 **Audio format requirements** — the uploaded WAV must match the `sample_rate` parameter:
 
 | Requirement | Value |
-|---|---|
+| --- | --- |
 | Format | WAV (16-bit PCM) |
 | Sample rate | Must match `sample_rate` form field (default `16000` Hz) |
 | Channels | Mono or stereo (stereo is down-mixed automatically) |
 
 If your recording is 44100 Hz or another rate, convert it first:
+
 ```bash
 ffmpeg -i input.wav -ar 16000 -ac 1 -sample_fmt s16 question.wav
 ```
 
 If the WAV sample rate does not match, the session ends with `"status": "failed"` and the `error` field contains the mismatch details and the conversion command.
 
-**Form Fields**
+**Form Fields:**
 
 Accepts the same fields as [Start Microphone Session](#start-microphone-session) plus:
 
 | Field | Type | Default | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `file` | binary | required | 16-bit PCM WAV audio file |
 | `realtime_factor` | `float` | `1.0` | Playback speed multiplier (`0.0`–`100.0`). Set to `10.0` to process as fast as possible. |
 
@@ -193,13 +195,13 @@ POST /api/v1/sessions/{session_id}/stop
 
 Requests an early stop of a running session.
 
-**Example**
+**Example:**
 
 ```bash
 curl --noproxy '*' -X POST http://127.0.0.1:8012/api/v1/sessions/<session_id>/stop
 ```
 
-**Response**
+**Response:**
 
 ```json
 {
@@ -216,7 +218,7 @@ curl --noproxy '*' -X POST http://127.0.0.1:8012/api/v1/sessions/<session_id>/st
 The session snapshot returned by **Get Session**, **Start**, and **Start File** has the following structure:
 
 | Field | Type | Description |
-|---|---|---|
+| --- | --- | --- |
 | `session_id` | `string` | Unique session identifier |
 | `source_kind` | `string` | `"microphone"` or `"file"` |
 | `status` | `string` | `"created"` / `"running"` / `"stopping"` / `"completed"` / `"failed"` |
@@ -237,7 +239,7 @@ The session snapshot returned by **Get Session**, **Start**, and **Start File** 
 ### `tts_audio_segments` item
 
 | Field | Type | Description |
-|---|---|---|
+| --- | --- | --- |
 | `index` | `int` | 1-based sentence index within the session |
 | `text` | `string` | Sentence text that was synthesized |
 | `audio_file` | `string` | Absolute path to the generated WAV file on the server. Accessible to the kiosk UI when both share the same `generated_audio/` volume mount. |

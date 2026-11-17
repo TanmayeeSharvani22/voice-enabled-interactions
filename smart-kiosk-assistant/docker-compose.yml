@@ -326,9 +326,9 @@ services:
 
   audio-analyzer:
     # Consumed as a prebuilt image only. The source lives in the separate
-    # edge-ai-libraries repo (../edge-ai-libraries/microservices/audio-analyzer,
-    # a fork kept in sync with upstream open-edge-platform/edge-ai-libraries);
-    # it is NOT built from this repo. Build the image once from that repo
+    # upstream open-edge-platform/edge-ai-libraries repo
+    # (microservices/audio-analyzer, at the commit pinned in
+    # docs/user-guide/get-started/build-from-source.md); it is NOT built from this repo. Build the image once from that repo
     # (`docker compose build` there) or pull it with REGISTRY=true, then it is
     # reused via the image: tag below.
     image: ${REGISTRY_REPO:-intel}/audio-analyzer:${RELEASE_TAG:-2026.3.0-rc1}
@@ -398,10 +398,11 @@ services:
       # same flag kiosk-core uses to decide whether to request diarization.
       # ./configs/audio-analyzer/config.yaml pins models.asr.diarization: True,
       # which makes preload_models() load pyannote at startup unconditionally —
-      # this override lets KIOSK_CORE_DIARIZATION_ENABLED=false (e.g. in CI,
-      # where no HF_TOKEN/model-licence acceptance is available) also skip that
-      # preload, instead of crashing with an unauthenticated 403 download.
-      AUDIO_ANALYZER__MODELS__ASR__DIARIZATION: ${KIOSK_CORE_DIARIZATION_ENABLED:-true}
+      # this override lets KIOSK_CORE_DIARIZATION_ENABLED=false (the default,
+      # and CI, where no HF_TOKEN/model-licence acceptance is available) also
+      # skip that preload, instead of crashing with an unauthenticated 403
+      # download.
+      AUDIO_ANALYZER__MODELS__ASR__DIARIZATION: ${KIOSK_CORE_DIARIZATION_ENABLED:-false}
       # ASR inference device override — must match config.yaml's own
       # models.asr.device (GPU), which this fallback exists to reproduce, not
       # contradict. It previously defaulted to CPU, which silently overrode
@@ -463,9 +464,9 @@ services:
 
   text-to-speech:
     # Consumed as a prebuilt image only. The source lives in the separate
-    # edge-ai-libraries repo (../edge-ai-libraries/microservices/text-to-speech,
-    # a fork kept in sync with upstream open-edge-platform/edge-ai-libraries,
-    # which adds the Kokoro TTS engine); it is NOT built from this repo. Build
+    # upstream open-edge-platform/edge-ai-libraries repo
+    # (microservices/text-to-speech, at the commit pinned in
+    # docs/user-guide/get-started/build-from-source.md); it is NOT built from this repo. Build
     # the image once from that repo (`docker compose build` there) or pull it
     # with REGISTRY=true, then it is reused via the image: tag below.
     image: ${REGISTRY_REPO:-intel}/text-to-speech:${RELEASE_TAG:-2026.3.0-rc1}
@@ -531,9 +532,9 @@ services:
       # than producing a plausible-but-wrong table 20 minutes later.
       TEXT_TO_SPEECH__MODELS__TTS__DTYPE:           ${TTS_DTYPE:-int8}
       # Voice vocabularies are per-implementation and do not overlap: Kokoro
-      # wants am_michael, SpeechT5/Qwen want Ryan. Switching the model without
+      # wants af_heart, SpeechT5/Qwen want Ryan. Switching the model without
       # switching the speaker makes every synthesis request fail validation.
-      TEXT_TO_SPEECH__MODELS__TTS__DEFAULT_SPEAKER: ${TTS_SPEAKER:-am_michael}
+      TEXT_TO_SPEECH__MODELS__TTS__DEFAULT_SPEAKER: ${TTS_SPEAKER:-af_heart}
       TEXT_TO_SPEECH__MODELS__TTS__MODEL_VARIANT:   ${TTS_MODEL_VARIANT:-custom_voice}
       # 2 uvicorn worker PROCESSES so overlapping synth calls (e.g. a
       # speculative draft's pre-synthesis running alongside the real turn's
@@ -700,7 +701,10 @@ services:
       - rag_service_hf_cache:/app/rag-service/.cache/huggingface
       # Mount kiosk-specific domain config into the container.
       # Generic image → kiosk-aware at runtime via this mount.
-      - ./configs/rag-service:/app/rag-service/domain-config:ro
+      # KIOSK_MENU_DIR selects the menu (default ./configs = QuickBite). Set it
+      # to ./configs/menus/ranger-burgers for the North American sample menu;
+      # kiosk-core's ./configs/ordering mount below follows the same variable.
+      - ${KIOSK_MENU_DIR:-./configs}/rag-service:/app/rag-service/domain-config:ro
       # Mount kiosk domain plugins (ordering agent, guards) from the consuming
       # application. The rag-service image has an empty plugins/ mount point;
       # all domain Python code lives here in the smart-kiosk-assistant repo.
@@ -910,15 +914,16 @@ services:
       # configs/text-to-speech/config.yaml), which has no "Ryan" voice, and
       # the stale override made EVERY TTS request 400 (silent replies) until
       # it was corrected to am_michael -- Kokoro's closest match to the old
-      # Ryan voice, and config.yaml's own default_speaker.
+      # Ryan voice. The Kokoro default is now af_heart (US female), chosen in
+      # a live listening test, and matches config.yaml's default_speaker.
       #
-      # Pinning am_michael then broke the opposite case: 9 of the 10 profiles
+      # Pinning a Kokoro voice then broke the opposite case: 9 of the 10 profiles
       # in configs/benchmark-profiles/ switch the service back to SpeechT5
       # with TTS_SPEAKER=Ryan, so the service came up on SpeechT5 while
       # kiosk-core kept asking for a Kokoro voice and every request failed.
       # Parameterised against the same variable the service reads, so the two
       # can no longer disagree; the default keeps the Kokoro behaviour.
-      KIOSK_CORE_TTS_VOICE:    ${TTS_SPEAKER:-am_michael}
+      KIOSK_CORE_TTS_VOICE:    ${TTS_SPEAKER:-af_heart}
       # kiosk_core.config.DEFAULT_TTS_MODEL falls back to "qwen-tts" when this
       # is unset. TtsClient sends whatever this resolves to as the model name
       # on every request, and the TTS backend matches by substring (e.g.
@@ -987,6 +992,10 @@ services:
       # word). Default off pending live A/B measurement; see config.py for
       # the full rationale (DEFAULT_SKIP_EMPTY_FINAL_FLUSH_ENABLED).
       KIOSK_CORE_SKIP_EMPTY_FINAL_FLUSH_ENABLED: ${KIOSK_CORE_SKIP_EMPTY_FINAL_FLUSH_ENABLED:-false}
+      # Keep listening when a turn held only a dropped filler ("Uh..."), so the
+      # customer's next words become the turn. See config.py
+      # (DEFAULT_FILLER_RELISTEN_ENABLED).
+      KIOSK_CORE_FILLER_RELISTEN_ENABLED: ${KIOSK_CORE_FILLER_RELISTEN_ENABLED:-true}
       # ASR trailing-silence trim (kiosk-voice-lab-main parity): trims the
       # audio actually SENT TO ASR down to "last speech + a short decay tail"
       # before every adaptive-pause/final flush, to stop Whisper hallucinating
@@ -1016,7 +1025,8 @@ services:
       KIOSK_CORE_SPECULATIVE_DRAFT_ENABLED: ${KIOSK_CORE_SPECULATIVE_DRAFT_ENABLED:-false}
       KIOSK_CORE_SPECULATIVE_TTS_PRESYNTH_ENABLED: ${KIOSK_CORE_SPECULATIVE_TTS_PRESYNTH_ENABLED:-false}
       KIOSK_CORE_METRICS_URL:  http://metrics-collector:9000
-      # Diarization — re-enable once HF terms are accepted for pyannote models.
+      # Diarization — off by default; set KIOSK_CORE_DIARIZATION_ENABLED=true
+      # once HF terms are accepted for pyannote models.
       # Accept terms at: https://huggingface.co/pyannote/speaker-diarization-community-1
       #                  https://huggingface.co/pyannote/speaker-diarization-3.1
       #                  https://huggingface.co/pyannote/segmentation-3.0
@@ -1027,11 +1037,11 @@ services:
       # Parameterized so setting the env var once takes effect on both
       # services (e.g. as a fallback toggle if diarization ever needs to be
       # disabled in an environment where the pyannote model cache is
-      # genuinely incomplete). Under normal offline operation, diarization
-      # should stay enabled — see the HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE
-      # vars on audio-analyzer above, which are the actual fix for pyannote
-      # loading fully offline from its already-complete local cache.
-      KIOSK_CORE_DIARIZATION_ENABLED: ${KIOSK_CORE_DIARIZATION_ENABLED:-true}
+      # genuinely incomplete). When diarization is enabled, see the
+      # HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE vars on audio-analyzer above,
+      # which are the actual fix for pyannote loading fully offline from its
+      # already-complete local cache.
+      KIOSK_CORE_DIARIZATION_ENABLED: ${KIOSK_CORE_DIARIZATION_ENABLED:-false}
       # Silero VAD (v5, onnxruntime): model-based replacement for the adaptive
       # RMS VAD's speech/silence decision. Default ON — every turn timer (the
       # 0.50s adaptive flush, the sentence-completeness shortcut and the 1.1s
@@ -1050,6 +1060,10 @@ services:
       # wait most turns. Falls back to the file-POST path per-session if the
       # socket fails to connect — never fails the turn. Default OFF.
       KIOSK_CORE_ANALYZER_STREAMING_ENABLED: ${KIOSK_CORE_ANALYZER_STREAMING_ENABLED:-false}
+      # Ask audio-analyzer for its realtime low-latency mode (streaming only,
+      # diarization off). No effect until the analyzer confirms the mode. See
+      # config.py (DEFAULT_ANALYZER_LOW_LATENCY_ENABLED). Default OFF.
+      KIOSK_CORE_ANALYZER_LOW_LATENCY_ENABLED: ${KIOSK_CORE_ANALYZER_LOW_LATENCY_ENABLED:-false}
       # Consecutive rejected turns (speaker filter dropped every segment as
       # non-primary) required before the kiosk speaks
       # KIOSK_CORE_UNRECOGNIZED_SPEAKER_PROMPT instead of staying silent.
@@ -1141,7 +1155,10 @@ services:
     volumes:
       - generated_audio:/app/generated_audio
       - kiosk_db:/app/data
-      - ./configs/ordering:/app/configs/ordering:ro
+      # Menu catalogue and upsell rules; see KIOSK_MENU_DIR on rag-service.
+      # Switching menus needs `make reset-menu-db` first: the seeder adds and
+      # updates products in kiosk_db but never deletes them.
+      - ${KIOSK_MENU_DIR:-./configs}/ordering:/app/configs/ordering:ro
       - ./conversations:/app/conversations
       - ${KIOSK_RESULTS_HOST_DIR:-./results}:/app/results
     depends_on:

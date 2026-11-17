@@ -1,0 +1,429 @@
+# Ranger Burgers (Store #218, Gilbert, Arizona): product catalogue
+# Opt-in North American sample menu. Select it with
+# KIOSK_MENU_DIR=./configs/menus/ranger-burgers (see docs/user-guide/get-started/configuration.md).
+# Source: knowledge-base-samples/RangerBurgers-QSR-menu.md
+# Format: product_id, name, category, price (USD), is_veg, is_bestseller, aliases
+# aliases lists common spoken names. kiosk-core does not read them yet; they
+# are kept for a follow-up that resolves them.
+# Categories: burgers, chicken, nuggets, sides, breakfast, desserts, beverages, kids, meals
+
+products:
+  # -- burgers -----------------------------------------------------
+  - product_id: BURGER-001
+    name: "Value Cheeseburger"
+    category: burgers
+    price: 1.49
+    is_veg: false
+    aliases: ["cheeseburger", "plain cheeseburger", "value cheeseburger", "small burger"]
+
+  - product_id: BURGER-002
+    name: "Ranger Classic Burger"
+    category: burgers
+    price: 4.79
+    is_veg: false
+    is_bestseller: true
+    aliases: ["classic burger", "ranger classic", "signature burger"]
+
+  - product_id: BURGER-003
+    name: "Ranger Double Burger"
+    category: burgers
+    price: 6.29
+    is_veg: false
+    aliases: ["double burger", "double", "ranger double"]
+
+  - product_id: BURGER-004
+    name: "Trailblazer Bacon Burger"
+    category: burgers
+    price: 6.49
+    is_veg: false
+    aliases: ["bacon burger", "trailblazer", "bacon cheeseburger"]
+
+  - product_id: BURGER-005
+    name: "Fire Ranger Double"
+    category: burgers
+    price: 6.79
+    is_veg: false
+    aliases: ["spicy double", "fire double", "spicy double burger", "fire ranger double"]
+
+  # -- chicken -----------------------------------------------------
+  - product_id: CHICKEN-001
+    name: "Crispy Chicken Sandwich"
+    category: chicken
+    price: 5.29
+    is_veg: false
+    aliases: ["crispy chicken", "crispy chicken sandwich", "fried chicken sandwich"]
+
+  - product_id: CHICKEN-002
+    name: "Grilled Chicken Sandwich"
+    category: chicken
+    price: 5.49
+    is_veg: false
+    aliases: ["grilled chicken", "grilled chicken sandwich", "healthy chicken sandwich"]
+
+  - product_id: CHICKEN-003
+    name: "Blaze Chicken Sandwich"
+    category: chicken
+    price: 5.79
+    is_veg: false
+    aliases: ["spicy chicken sandwich", "blaze chicken", "hot chicken sandwich"]
+
+  - product_id: CHICKEN-004
+    name: "Smoky Ranch Chicken Melt"
+    category: chicken
+    price: 5.99
+    is_veg: false
+    aliases: ["smoky chicken melt", "ranch chicken melt", "smoky ranch melt"]
+
+  # -- burgers -----------------------------------------------------
+  - product_id: BURGER-006
+    name: "Sonoran Green Chile Burger"
+    category: burgers
+    price: 5.29
+    is_veg: false
+    aliases: ["green chile burger", "sonoran burger", "hatch chile burger"]
+
+  # -- nuggets -----------------------------------------------------
+  - product_id: NUGGET-001
+    name: "Ranger Nuggets, 6 piece"
+    category: nuggets
+    price: 2.99
+    is_veg: false
+    aliases: ["6 piece nuggets", "6 nuggets"]
+
+  - product_id: NUGGET-002
+    name: "Ranger Nuggets, 10 piece"
+    category: nuggets
+    price: 4.49
+    is_veg: false
+    is_bestseller: true
+    aliases: ["10 piece nuggets", "10 nuggets", "nuggets"]
+
+  - product_id: NUGGET-003
+    name: "Ranger Nuggets, 20 piece"
+    category: nuggets
+    price: 7.99
+    is_veg: false
+    aliases: ["20 piece nuggets", "20 nuggets"]
+
+  - product_id: NUGGET-004
+    name: "Spicy Ranger Nuggets, 6 piece"
+    category: nuggets
+    price: 3.29
+    is_veg: false
+    aliases: ["spicy nuggets", "spicy chicken nuggets", "hot nuggets"]
+
+  # -- sides -------------------------------------------------------
+  - product_id: SIDE-001
+    name: "Ranger Fries, Small"
+    category: sides
+    price: 1.99
+    is_veg: true
+    aliases: ["small fry", "small fries", "small ranger fries"]
+
+  - product_id: SIDE-002
+    name: "Ranger Fries, Medium"
+    category: sides
+    price: 2.49
+    is_veg: true
+    is_bestseller: true
+    aliases: ["fries", "medium fry", "medium fries", "regular fries"]
+
+  - product_id: SIDE-003
+    name: "Ranger Fries, Large"
+    category: sides
+    price: 2.99
+    is_veg: true
+    aliases: ["large fry", "large fries", "big fries"]
+
+  - product_id: SIDE-004
+    name: "Ranger Onion Rings"
+    category: sides
+    price: 2.99
+    is_veg: true
+    aliases: ["onion rings", "rings"]
+
+  - product_id: SIDE-005
+    name: "Garden Side Salad"
+    category: sides
+    price: 2.49
+    is_veg: true
+    aliases: ["side salad", "garden salad", "salad"]
+
+  - product_id: SIDE-006
+    name: "Loaded Ranger Fries"
+    category: sides
+    price: 4.29
+    is_veg: false
+    aliases: ["loaded fries", "cheese fries", "bacon fries"]
+
+  # -- breakfast ---------------------------------------------------
+  - product_id: BREAKFAST-001
+    name: "Ranger Sunrise Biscuit"
+    category: breakfast
+    price: 3.49
+    is_veg: false
+    aliases: ["sausage biscuit", "sunrise biscuit", "breakfast sandwich", "sausage egg biscuit"]
+
+  - product_id: BREAKFAST-002
+    name: "Egg and Cheese Biscuit"
+    category: breakfast
+    price: 2.79
+    is_veg: true
+    aliases: ["egg and cheese biscuit", "veggie breakfast biscuit", "egg biscuit"]
+
+  - product_id: BREAKFAST-003
+    name: "Hash Rounds"
+    category: breakfast
+    price: 1.99
+    is_veg: true
+    aliases: ["hash rounds", "hash browns", "potato rounds"]
+
+  - product_id: BREAKFAST-004
+    name: "Pancake Stack"
+    category: breakfast
+    price: 3.29
+    is_veg: true
+    aliases: ["pancakes", "pancake stack", "short stack"]
+
+  # -- desserts ----------------------------------------------------
+  - product_id: DESSERT-001
+    name: "Vanilla Shake"
+    category: desserts
+    price: 3.49
+    is_veg: true
+    aliases: ["vanilla shake", "shake"]
+
+  - product_id: DESSERT-002
+    name: "Chocolate Shake"
+    category: desserts
+    price: 3.49
+    is_veg: true
+    aliases: ["chocolate shake", "choc shake"]
+
+  - product_id: DESSERT-003
+    name: "Strawberry Shake"
+    category: desserts
+    price: 3.49
+    is_veg: true
+    aliases: ["strawberry shake"]
+
+  - product_id: DESSERT-004
+    name: "Soft-Serve Cone"
+    category: desserts
+    price: 1.29
+    is_veg: true
+    aliases: ["ice cream cone", "soft serve", "cone", "soft serve cone", "ice cream"]
+
+  - product_id: DESSERT-005
+    name: "Ranger Fried Apple Pie"
+    category: desserts
+    price: 1.49
+    is_veg: true
+    aliases: ["apple pie", "fried pie", "ranger pie"]
+
+  - product_id: DESSERT-006
+    name: "Banana Split Shake"
+    category: desserts
+    price: 3.99
+    is_veg: true
+    is_bestseller: true
+    aliases: ["banana split shake", "banana shake"]
+
+  - product_id: DESSERT-007
+    name: "Caramel Apple Sundae"
+    category: desserts
+    price: 2.49
+    is_veg: true
+    aliases: ["caramel apple sundae", "apple sundae", "caramel sundae", "sundae", "sunday", "caramel apple sunday", "apple sunday", "caramel sunday", "ice cream sunday", "ice cream sundae", "the sunday", "the sundae"]
+
+  - product_id: DESSERT-008
+    name: "Peach Cobbler Hand Pie"
+    category: desserts
+    price: 1.49
+    is_veg: true
+    aliases: ["peach cobbler pie", "peach hand pie", "peach pie", "cobbler", "peach cobbler"]
+
+  # -- beverages ---------------------------------------------------
+  - product_id: DRINK-001
+    name: "Fountain Drink, Small"
+    category: beverages
+    price: 1.49
+    is_veg: true
+    aliases: ["small drink", "small soda", "small fountain drink", "small soft drink", "small lemonade", "small cola", "small coke"]
+
+  - product_id: DRINK-002
+    name: "Fountain Drink, Medium"
+    category: beverages
+    price: 1.79
+    is_veg: true
+    aliases: ["medium drink", "medium soda", "medium fountain drink", "regular drink", "lemonade", "medium lemonade", "cola", "medium cola", "coke", "soda", "fountain drink"]
+
+  - product_id: DRINK-003
+    name: "Fountain Drink, Large"
+    category: beverages
+    price: 1.99
+    is_veg: true
+    aliases: ["large drink", "large soda", "large fountain drink", "big drink", "large lemonade", "large cola", "large coke"]
+
+  - product_id: DRINK-004
+    name: "Iced Tea, Sweet, Small"
+    category: beverages
+    price: 1.49
+    is_veg: true
+    aliases: ["small sweet tea"]
+
+  - product_id: DRINK-005
+    name: "Iced Tea, Sweet, Medium"
+    category: beverages
+    price: 1.79
+    is_veg: true
+    aliases: ["sweet tea", "medium sweet tea"]
+
+  - product_id: DRINK-006
+    name: "Iced Tea, Sweet, Large"
+    category: beverages
+    price: 1.99
+    is_veg: true
+    aliases: ["large sweet tea"]
+
+  - product_id: DRINK-007
+    name: "Iced Tea, Unsweet, Small"
+    category: beverages
+    price: 1.49
+    is_veg: true
+    aliases: ["small unsweet tea", "small unsweetened tea"]
+
+  - product_id: DRINK-008
+    name: "Iced Tea, Unsweet, Medium"
+    category: beverages
+    price: 1.79
+    is_veg: true
+    aliases: ["unsweet tea", "unsweetened tea", "medium unsweet tea"]
+
+  - product_id: DRINK-009
+    name: "Iced Tea, Unsweet, Large"
+    category: beverages
+    price: 1.99
+    is_veg: true
+    aliases: ["large unsweet tea", "large unsweetened tea"]
+
+  - product_id: DRINK-010
+    name: "Coffee, Small"
+    category: beverages
+    price: 1.29
+    is_veg: true
+    aliases: ["small coffee"]
+
+  - product_id: DRINK-011
+    name: "Coffee, Medium"
+    category: beverages
+    price: 1.59
+    is_veg: true
+    aliases: ["coffee", "medium coffee"]
+
+  - product_id: DRINK-012
+    name: "Coffee, Large"
+    category: beverages
+    price: 1.79
+    is_veg: true
+    aliases: ["large coffee"]
+
+  - product_id: DRINK-013
+    name: "Bottled Water"
+    category: beverages
+    price: 1.79
+    is_veg: true
+    aliases: ["bottled water", "water"]
+
+  # -- kids --------------------------------------------------------
+  - product_id: KIDS-001
+    name: "Ranger Rustlers Kids Meal"
+    category: kids
+    price: 4.29
+    is_veg: false
+    aliases: ["kids meal", "kid's meal", "kids combo", "rustlers kids meal"]
+
+  # -- meals -------------------------------------------------------
+  - product_id: MEAL-001-meal
+    name: "Value Cheeseburger Meal"
+    category: meals
+    price: 4.77
+    is_veg: false
+    aliases: ["value cheeseburger meal", "value cheeseburger combo", "value cheeseburger meal deal", "cheeseburger meal", "plain cheeseburger meal", "number 1", "meal number 1", "the number 1", "a number 1", "value meal"]
+
+  - product_id: MEAL-002-meal
+    name: "Ranger Classic Burger Meal"
+    category: meals
+    price: 8.07
+    is_veg: false
+    aliases: ["ranger classic burger meal", "ranger classic burger combo", "ranger classic burger meal deal", "classic burger meal", "ranger classic meal", "signature burger meal", "number 2", "meal number 2", "the number 2", "a number 2"]
+
+  - product_id: MEAL-003-meal
+    name: "Ranger Double Burger Meal"
+    category: meals
+    price: 9.57
+    is_veg: false
+    aliases: ["ranger double burger meal", "ranger double burger combo", "ranger double burger meal deal", "double burger meal", "double meal", "ranger double meal", "number 3", "meal number 3", "the number 3", "a number 3"]
+
+  - product_id: MEAL-004-meal
+    name: "Trailblazer Bacon Burger Meal"
+    category: meals
+    price: 9.77
+    is_veg: false
+    aliases: ["trailblazer bacon burger meal", "trailblazer bacon burger combo", "trailblazer bacon burger meal deal", "bacon burger meal", "trailblazer meal", "bacon cheeseburger meal", "number 4", "meal number 4", "the number 4", "a number 4"]
+
+  - product_id: MEAL-005-meal
+    name: "Fire Ranger Double Meal"
+    category: meals
+    price: 10.07
+    is_veg: false
+    aliases: ["fire ranger double meal", "fire ranger double combo", "fire ranger double meal deal", "spicy double meal", "fire double meal", "spicy double burger meal", "number 5", "meal number 5", "the number 5", "a number 5"]
+
+  - product_id: MEAL-006-meal
+    name: "Crispy Chicken Sandwich Meal"
+    category: meals
+    price: 8.57
+    is_veg: false
+    aliases: ["crispy chicken sandwich meal", "crispy chicken sandwich combo", "crispy chicken sandwich meal deal", "crispy chicken meal", "fried chicken sandwich meal", "number 6", "meal number 6", "the number 6", "a number 6"]
+
+  - product_id: MEAL-007-meal
+    name: "Grilled Chicken Sandwich Meal"
+    category: meals
+    price: 8.77
+    is_veg: false
+    aliases: ["grilled chicken sandwich meal", "grilled chicken sandwich combo", "grilled chicken sandwich meal deal", "grilled chicken meal", "healthy chicken sandwich meal", "number 7", "meal number 7", "the number 7", "a number 7"]
+
+  - product_id: MEAL-008-meal
+    name: "Blaze Chicken Sandwich Meal"
+    category: meals
+    price: 9.07
+    is_veg: false
+    aliases: ["blaze chicken sandwich meal", "blaze chicken sandwich combo", "blaze chicken sandwich meal deal", "spicy chicken sandwich meal", "blaze chicken meal", "hot chicken sandwich meal", "number 8", "meal number 8", "the number 8", "a number 8"]
+
+  - product_id: MEAL-009-meal
+    name: "Smoky Ranch Chicken Melt Meal"
+    category: meals
+    price: 9.27
+    is_veg: false
+    aliases: ["smoky ranch chicken melt meal", "smoky ranch chicken melt combo", "smoky ranch chicken melt meal deal", "smoky chicken melt meal", "ranch chicken melt meal", "smoky ranch melt meal", "number 9", "meal number 9", "the number 9", "a number 9"]
+
+  - product_id: MEAL-010-meal
+    name: "Sonoran Green Chile Burger Meal"
+    category: meals
+    price: 8.57
+    is_veg: false
+    aliases: ["sonoran green chile burger meal", "sonoran green chile burger combo", "sonoran green chile burger meal deal", "green chile burger meal", "sonoran burger meal", "hatch chile burger meal", "number 10", "meal number 10", "the number 10", "a number 10"]
+
+  - product_id: MEAL-011-meal
+    name: "Nugget Meal"
+    category: meals
+    price: 7.77
+    is_veg: false
+    aliases: ["nugget meal", "ranger nuggets, 10 piece meal", "ranger nuggets, 10 piece combo", "ranger nuggets, 10 piece meal deal", "10 piece nuggets meal", "10 nuggets meal", "nuggets meal", "nugget combo", "chicken nugget meal"]
+
+  - product_id: MEAL-012-meal
+    name: "Sunrise Biscuit Meal"
+    category: meals
+    price: 5.77
+    is_veg: false
+    aliases: ["sunrise biscuit meal", "ranger sunrise biscuit meal", "ranger sunrise biscuit combo", "ranger sunrise biscuit meal deal", "sausage biscuit meal", "breakfast sandwich meal", "breakfast meal", "biscuit meal", "breakfast combo"]
